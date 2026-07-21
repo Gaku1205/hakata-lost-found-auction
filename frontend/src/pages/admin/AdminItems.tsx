@@ -84,22 +84,27 @@ const AdminRow = ({ item, onChanged, onError }: RowProps): JSX.Element => {
               <span className="table-sub">落札者: {item.winnerNickname}</span>
             ) : null}
             {item.pickupStatus === 'reserved' ? (
-              <form className="pickup-verify" onSubmit={handleComplete}>
-                <label className="sr-only" htmlFor={`code-${item.itemId}`}>
-                  受取コード
-                </label>
-                <input
-                  id={`code-${item.itemId}`}
-                  type="text"
-                  inputMode="numeric"
-                  placeholder="受取コード"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                />
-                <button type="submit" className="btn btn--ghost btn--small" disabled={busy}>
-                  照合して完了
-                </button>
-              </form>
+              <>
+                <p className="table-sub">
+                  窓口での代理照合（通常は購入者が無人ボックスで自己解錠します）
+                </p>
+                <form className="pickup-verify" onSubmit={handleComplete}>
+                  <label className="sr-only" htmlFor={`code-${item.itemId}`}>
+                    受取コード
+                  </label>
+                  <input
+                    id={`code-${item.itemId}`}
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="受取コード"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                  />
+                  <button type="submit" className="btn btn--ghost btn--small" disabled={busy}>
+                    照合して完了
+                  </button>
+                </form>
+              </>
             ) : null}
           </>
         ) : (

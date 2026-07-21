@@ -4,6 +4,7 @@ import { useAuth } from './auth/AuthContext';
 import { RequireAdmin, RequireAuth } from './components/RequireAdmin';
 import { AdminItemForm } from './pages/admin/AdminItemForm';
 import { AdminItems } from './pages/admin/AdminItems';
+import { AdminOrganizations } from './pages/admin/AdminOrganizations';
 import { BidMonitor } from './pages/admin/BidMonitor';
 import { Dashboard } from './pages/Dashboard';
 import { Home } from './pages/Home';
@@ -195,6 +196,14 @@ export const App = (): JSX.Element => (
           element={
             <RequireAdmin>
               <AdminItems />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="/admin/organizations"
+          element={
+            <RequireAdmin>
+              <AdminOrganizations />
             </RequireAdmin>
           }
         />

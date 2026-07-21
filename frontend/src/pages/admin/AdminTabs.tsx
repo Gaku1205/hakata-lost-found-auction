@@ -5,6 +5,9 @@ export const AdminTabs = (): JSX.Element => (
     <NavLink to="/admin" end className="admin-tabs__tab">
       出品管理
     </NavLink>
+    <NavLink to="/admin/organizations" className="admin-tabs__tab">
+      出品元管理
+    </NavLink>
     <NavLink to="/admin/monitor" className="admin-tabs__tab">
       入札監視
     </NavLink>

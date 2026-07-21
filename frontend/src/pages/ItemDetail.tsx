@@ -3,10 +3,10 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 import { ApiError, fetchItemDetail, postBid } from '../api';
 import { useAuth } from '../auth/AuthContext';
 import { CategoryIcon } from '../components/CategoryIcon';
-import { formatFoundMonth, relativeTime, timeLeft, yen } from '../format';
+import { formatDate, formatFoundMonth, relativeTime, timeLeft, yen } from '../format';
 import { useLoadable, useNow } from '../hooks';
 import type { Bid, LostItem } from '../types';
-import { CATEGORY_LABELS } from '../types';
+import { CATEGORY_LABELS, CONDITION_LABELS, ORG_TYPE_LABELS } from '../types';
 
 type BidFormProps = {
   item: LostItem;
@@ -212,6 +212,9 @@ export const ItemDetail = (): JSX.Element => {
             {isClosed ? <span className="card__badge">落札済み</span> : null}
           </div>
           <span className="chip">{CATEGORY_LABELS[item.category]}</span>
+          <span className={`condition-chip condition-chip--${item.conditionRank}`}>
+            {CONDITION_LABELS[item.conditionRank]}
+          </span>
           <h1 className="detail__title">{item.title}</h1>
           <p className="detail__description">{item.description}</p>
 
@@ -223,6 +226,36 @@ export const ItemDetail = (): JSX.Element => {
             <div className="meta__row">
               <dt>拾得時期</dt>
               <dd>{formatFoundMonth(item.foundMonth)}</dd>
+            </div>
+            <div className="meta__row">
+              <dt>状態</dt>
+              <dd>{CONDITION_LABELS[item.conditionRank]}</dd>
+            </div>
+            <div className="meta__row">
+              <dt>数量</dt>
+              <dd>{item.quantity}点</dd>
+            </div>
+            {item.size !== undefined ? (
+              <div className="meta__row">
+                <dt>サイズ・寸法</dt>
+                <dd>{item.size}</dd>
+              </div>
+            ) : null}
+            {item.color !== undefined ? (
+              <div className="meta__row">
+                <dt>色</dt>
+                <dd>{item.color}</dd>
+              </div>
+            ) : null}
+            {item.brand !== undefined ? (
+              <div className="meta__row">
+                <dt>ブランド・メーカー</dt>
+                <dd>{item.brand}</dd>
+              </div>
+            ) : null}
+            <div className="meta__row">
+              <dt>付属品</dt>
+              <dd>{item.accessories ?? 'なし'}</dd>
             </div>
             <div className="meta__row">
               <dt>受取拠点</dt>
@@ -238,10 +271,42 @@ export const ItemDetail = (): JSX.Element => {
               <dd>{yen(item.startPrice)}</dd>
             </div>
             <div className="meta__row">
-              <dt>出品者</dt>
-              <dd>福岡県（遺失物法に基づき県に帰属した物品）</dd>
+              <dt>提供元</dt>
+              <dd>
+                {item.orgName}
+                <span className={`org-badge org-badge--${item.orgType}`}>
+                  {ORG_TYPE_LABELS[item.orgType]}
+                </span>
+              </dd>
             </div>
           </dl>
+
+          <aside className="legal-panel" aria-label="受け渡し管理情報">
+            <h2 className="legal-panel__heading">受け渡し管理情報</h2>
+            <dl className="meta meta--compact">
+              <div className="meta__row">
+                <dt>整理番号</dt>
+                <dd>{item.caseNumber}</dd>
+              </div>
+              <div className="meta__row">
+                <dt>拾得日</dt>
+                <dd>{formatDate(item.foundDate)}</dd>
+              </div>
+              <div className="meta__row">
+                <dt>公告日</dt>
+                <dd>{formatDate(item.noticeDate)}</dd>
+              </div>
+              <div className="meta__row">
+                <dt>保管期間満了日</dt>
+                <dd>{formatDate(item.custodyEndDate)}</dd>
+              </div>
+            </dl>
+            <p className="legal-panel__note">
+              {item.orgType === 'police'
+                ? `遺失物法に基づく保管期間の満了により、本品は${item.orgName}に帰属した物品です。`
+                : `遺失物法（施設占有者拾得）および民法240条の規定に基づき、公告期間満了後、本品の所有権は${item.orgName}に帰属しました。`}
+            </p>
+          </aside>
 
           <aside className="fairness-note" aria-label="公正なオークションのための仕組み">
             <h2 className="fairness-note__heading">公正なオークションのために</h2>

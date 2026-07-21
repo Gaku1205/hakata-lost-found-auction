@@ -3,15 +3,20 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ApiError,
   adminCreateItem,
+  adminListOrganizations,
   adminRequestImageUploadUrl,
   adminUpdateItem,
   fetchItemDetail,
 } from '../../api';
-import type { AdminItemInput, ItemCategory } from '../../types';
+import type { AdminItemInput, ConditionRank, ItemCategory, OrgType, Organization } from '../../types';
 import {
   CATEGORY_LABELS,
   CATEGORY_ORDER,
+  CONDITION_LABELS,
+  CONDITION_ORDER,
+  ORG_TYPE_LABELS,
   PICKUP_LOCATION_PRESETS,
+  isConditionRank,
   isItemCategory,
 } from '../../types';
 
@@ -24,6 +29,14 @@ type FormState = {
   pickupLocation: string;
   startPrice: string;
   endTimeLocal: string;
+  conditionRank: ConditionRank;
+  quantity: string;
+  foundDate: string;
+  accessories: string;
+  size: string;
+  color: string;
+  brand: string;
+  orgId: string;
 };
 
 const defaultEndTimeLocal = (): string => {
@@ -43,6 +56,8 @@ const isoToLocalInput = (iso: string): string => {
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
+const defaultFoundDate = (): string => new Date().toISOString().slice(0, 10);
+
 const INITIAL_FORM: FormState = {
   title: '',
   category: 'umbrella',
@@ -52,6 +67,14 @@ const INITIAL_FORM: FormState = {
   pickupLocation: PICKUP_LOCATION_PRESETS[0] ?? '',
   startPrice: '100',
   endTimeLocal: defaultEndTimeLocal(),
+  conditionRank: 'good',
+  quantity: '1',
+  foundDate: defaultFoundDate(),
+  accessories: '',
+  size: '',
+  color: '',
+  brand: '',
+  orgId: '',
 };
 
 export const AdminItemForm = (): JSX.Element => {
@@ -71,6 +94,32 @@ export const AdminItemForm = (): JSX.Element => {
   const [imageRemoved, setImageRemoved] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
 
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [orgsError, setOrgsError] = useState<string | null>(null);
+  const [existingOrg, setExistingOrg] = useState<{ name: string; type: OrgType } | null>(null);
+
+  useEffect(() => {
+    if (isEdit) return;
+    let cancelled = false;
+    adminListOrganizations()
+      .then(({ organizations: orgs }) => {
+        if (cancelled) return;
+        setOrganizations(orgs);
+        const first = orgs[0];
+        if (first !== undefined) {
+          setForm((prev) => ({ ...prev, orgId: first.orgId }));
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setOrgsError(err instanceof ApiError ? err.message : '出品元の取得に失敗しました');
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEdit]);
+
   useEffect(() => {
     if (!isEdit) return;
     let cancelled = false;
@@ -86,7 +135,16 @@ export const AdminItemForm = (): JSX.Element => {
           pickupLocation: item.pickupLocation ?? PICKUP_LOCATION_PRESETS[0] ?? '',
           startPrice: String(item.startPrice),
           endTimeLocal: isoToLocalInput(item.endTime),
+          conditionRank: item.conditionRank,
+          quantity: String(item.quantity),
+          foundDate: item.foundDate,
+          accessories: item.accessories ?? '',
+          size: item.size ?? '',
+          color: item.color ?? '',
+          brand: item.brand ?? '',
+          orgId: item.orgId,
         });
+        setExistingOrg({ name: item.orgName, type: item.orgType });
         setOriginalImageUrl(item.imageUrl);
         setImagePreview(item.imageUrl ?? null);
         setLoading(false);
@@ -154,6 +212,19 @@ export const AdminItemForm = (): JSX.Element => {
       setError('終了日時は未来の日時を指定してください');
       return;
     }
+    const quantity = Number.parseInt(form.quantity, 10);
+    if (Number.isNaN(quantity) || quantity < 1 || quantity > 99) {
+      setError('数量は1〜99の整数で入力してください');
+      return;
+    }
+    if (Number.isNaN(new Date(form.foundDate).getTime())) {
+      setError('拾得日を入力してください');
+      return;
+    }
+    if (!isEdit && form.orgId === '') {
+      setError('出品元を選択してください');
+      return;
+    }
 
     const baseInput: AdminItemInput = {
       title: form.title,
@@ -164,6 +235,13 @@ export const AdminItemForm = (): JSX.Element => {
       pickupLocation: form.pickupLocation,
       startPrice,
       endTime: endDate.toISOString(),
+      conditionRank: form.conditionRank,
+      quantity,
+      foundDate: form.foundDate,
+      accessories: form.accessories.trim() === '' ? undefined : form.accessories.trim(),
+      size: form.size.trim() === '' ? undefined : form.size.trim(),
+      color: form.color.trim() === '' ? undefined : form.color.trim(),
+      brand: form.brand.trim() === '' ? undefined : form.brand.trim(),
     };
 
     setSubmitting(true);
@@ -172,7 +250,7 @@ export const AdminItemForm = (): JSX.Element => {
       try {
         let currentItemId = itemId;
         if (!isEdit) {
-          const { item: created } = await adminCreateItem(baseInput);
+          const { item: created } = await adminCreateItem(baseInput, form.orgId);
           currentItemId = created.itemId;
         }
         if (currentItemId === undefined) {
@@ -250,6 +328,39 @@ export const AdminItemForm = (): JSX.Element => {
           </div>
 
           <div className="field">
+            <label htmlFor="form-org">出品元</label>
+            {isEdit ? (
+              <p className="field__static">
+                {existingOrg !== null
+                  ? `${existingOrg.name}（${ORG_TYPE_LABELS[existingOrg.type]}）`
+                  : '—'}
+                <span className="field__help">出品元は作成後に変更できません</span>
+              </p>
+            ) : (
+              <>
+                <select
+                  id="form-org"
+                  value={form.orgId}
+                  onChange={(e) => set('orgId', e.target.value)}
+                  required
+                >
+                  {organizations.length === 0 ? <option value="">出品元を選択</option> : null}
+                  {organizations.map((org) => (
+                    <option key={org.orgId} value={org.orgId}>
+                      {org.name}（{ORG_TYPE_LABELS[org.type]}）
+                    </option>
+                  ))}
+                </select>
+                {orgsError !== null ? (
+                  <p className="field__error" role="alert">
+                    {orgsError}（先に「出品元管理」タブから登録してください）
+                  </p>
+                ) : null}
+              </>
+            )}
+          </div>
+
+          <div className="field">
             <label htmlFor="form-image">商品画像</label>
             <div className="image-upload">
               {imagePreview !== null ? (
@@ -313,6 +424,97 @@ export const AdminItemForm = (): JSX.Element => {
                 value={form.foundMonth}
                 onChange={(e) => set('foundMonth', e.target.value)}
                 required
+              />
+            </div>
+          </div>
+
+          <div className="form-grid">
+            <div className="field">
+              <label htmlFor="form-condition">状態ランク</label>
+              <select
+                id="form-condition"
+                value={form.conditionRank}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (isConditionRank(value)) set('conditionRank', value);
+                }}
+              >
+                {CONDITION_ORDER.map((rank) => (
+                  <option key={rank} value={rank}>
+                    {CONDITION_LABELS[rank]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="form-quantity">数量</label>
+              <input
+                id="form-quantity"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={99}
+                step={1}
+                value={form.quantity}
+                onChange={(e) => set('quantity', e.target.value)}
+                required
+              />
+            </div>
+          </div>
+
+          <div className="field">
+            <label htmlFor="form-found-date">拾得日</label>
+            <input
+              id="form-found-date"
+              type="date"
+              value={form.foundDate}
+              onChange={(e) => set('foundDate', e.target.value)}
+              required
+            />
+            <p className="field__help">
+              公告日・保管期間満了日・整理番号は拾得日から自動的に算出されます
+            </p>
+          </div>
+
+          <div className="form-grid">
+            <div className="field">
+              <label htmlFor="form-size">サイズ・寸法（任意）</label>
+              <input
+                id="form-size"
+                type="text"
+                value={form.size}
+                onChange={(e) => set('size', e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="form-color">色（任意）</label>
+              <input
+                id="form-color"
+                type="text"
+                value={form.color}
+                onChange={(e) => set('color', e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="form-grid">
+            <div className="field">
+              <label htmlFor="form-brand">ブランド・メーカー（任意）</label>
+              <input
+                id="form-brand"
+                type="text"
+                value={form.brand}
+                onChange={(e) => set('brand', e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="form-accessories">付属品（任意）</label>
+              <input
+                id="form-accessories"
+                type="text"
+                placeholder="例: 元箱・保証書"
+                value={form.accessories}
+                onChange={(e) => set('accessories', e.target.value)}
               />
             </div>
           </div>

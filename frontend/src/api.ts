@@ -1,16 +1,18 @@
 import { getCurrentIdToken } from './auth/tokenStore';
 import type {
   AdminItemInput,
+  AdminOrgInput,
   Bid,
   BidMonitor,
   BidderSummary,
   LostItem,
   MonitorBid,
+  Organization,
   PickupStatus,
   SearchQuery,
   Stats,
 } from './types';
-import { isItemCategory } from './types';
+import { isItemCategory, isOrgType } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -72,7 +74,11 @@ type PickupReservationResponse = {
   pickupStatus: PickupStatus;
   pickupDate: string;
   pickupCode: string;
+  pickupBoxNumber: number;
 };
+type PickupCompleteResponse = { pickupStatus: PickupStatus };
+type OrganizationsResponse = { organizations: Organization[] };
+type OrganizationResponse = { organization: Organization };
 
 const isItemsResponse = (value: unknown): value is ItemsResponse =>
   isRecord(value) && Array.isArray(value.items) && value.items.every(isLostItem);
@@ -124,7 +130,25 @@ const isPickupReservationResponse = (value: unknown): value is PickupReservation
   isRecord(value) &&
   (value.pickupStatus === 'reserved' || value.pickupStatus === 'completed') &&
   typeof value.pickupDate === 'string' &&
-  typeof value.pickupCode === 'string';
+  typeof value.pickupCode === 'string' &&
+  typeof value.pickupBoxNumber === 'number';
+
+const isPickupCompleteResponse = (value: unknown): value is PickupCompleteResponse =>
+  isRecord(value) &&
+  (value.pickupStatus === 'reserved' || value.pickupStatus === 'completed');
+
+const isOrganization = (value: unknown): value is Organization =>
+  isRecord(value) &&
+  typeof value.orgId === 'string' &&
+  typeof value.name === 'string' &&
+  isOrgType(value.type) &&
+  typeof value.createdAt === 'string';
+
+const isOrganizationsResponse = (value: unknown): value is OrganizationsResponse =>
+  isRecord(value) && Array.isArray(value.organizations) && value.organizations.every(isOrganization);
+
+const isOrganizationResponse = (value: unknown): value is OrganizationResponse =>
+  isRecord(value) && isOrganization(value.organization);
 
 const isAnything = (_value: unknown): _value is unknown => true;
 
@@ -214,10 +238,21 @@ export const postPickupReservation = (
     jsonInit('POST', { date }),
   );
 
+// 無人ボックスでのセルフ受け取り完了（購入者本人の操作）
+export const postPickupSelfComplete = (itemId: string): Promise<PickupCompleteResponse> =>
+  request(
+    `/api/items/${encodeURIComponent(itemId)}/pickup-self-complete`,
+    isPickupCompleteResponse,
+    { method: 'POST' },
+  );
+
 // ---------- 管理者 ----------
 
-export const adminCreateItem = (input: AdminItemInput): Promise<ItemResponse> =>
-  request('/api/admin/items', isItemResponse, jsonInit('POST', input));
+export const adminCreateItem = (
+  input: AdminItemInput,
+  orgId: string,
+): Promise<ItemResponse> =>
+  request('/api/admin/items', isItemResponse, jsonInit('POST', { ...input, orgId }));
 
 export const adminUpdateItem = (
   itemId: string,
@@ -263,3 +298,11 @@ export const adminRequestImageUploadUrl = (
     isImageUploadUrlResponse,
     jsonInit('POST', { itemId, contentType }),
   );
+
+export const adminListOrganizations = (): Promise<OrganizationsResponse> =>
+  request('/api/admin/organizations', isOrganizationsResponse);
+
+export const adminCreateOrganization = (
+  input: AdminOrgInput,
+): Promise<OrganizationResponse> =>
+  request('/api/admin/organizations', isOrganizationResponse, jsonInit('POST', input));

@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import type { LostItem } from '../types';
-import { CATEGORY_LABELS } from '../types';
+import { CATEGORY_LABELS, CONDITION_LABELS } from '../types';
 import { timeLeft, yen } from '../format';
 import { CategoryIcon } from './CategoryIcon';
 
@@ -38,11 +38,17 @@ export const ItemCard = ({ item, nowMs, index }: Props): JSX.Element => {
       </div>
       <div className="card__body">
         <div className="card__tags">
-          <span className="chip">{CATEGORY_LABELS[item.category]}</span>
+          <span className="card__tag-group">
+            <span className="chip">{CATEGORY_LABELS[item.category]}</span>
+            <span className={`condition-chip condition-chip--${item.conditionRank}`}>
+              {CONDITION_LABELS[item.conditionRank]}
+            </span>
+          </span>
           <span className="card__bids">入札 {item.bidCount}件</span>
         </div>
         <h3 className="card__title">{item.title}</h3>
         <p className="card__location">{item.foundLocation} で発見</p>
+        <p className="card__org">提供元: {item.orgName}</p>
         <div className="card__price-row">
           <span className="card__price-label">{isClosed ? '落札価格' : '現在価格'}</span>
           <span className="card__price">{yen(item.currentPrice)}</span>

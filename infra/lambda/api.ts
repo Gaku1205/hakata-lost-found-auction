@@ -14,18 +14,23 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { authenticate, type AuthUser } from './auth';
 import {
+  isConditionRank,
   isItemCategory,
+  isOrgType,
   isSortKey,
   type AdminItemInput,
+  type AdminOrgInput,
   type Bid,
   type BidderSummary,
   type LostItem,
+  type Organization,
   type SortKey,
   type Stats,
 } from './types';
 
 const ITEMS_TABLE = process.env.ITEMS_TABLE ?? '';
 const BIDS_TABLE = process.env.BIDS_TABLE ?? '';
+const ORGANIZATIONS_TABLE = process.env.ORGANIZATIONS_TABLE ?? '';
 const USER_POOL_ID = process.env.USER_POOL_ID ?? '';
 const USER_POOL_CLIENT_ID = process.env.USER_POOL_CLIENT_ID ?? '';
 const REGION = process.env.AWS_REGION ?? 'ap-northeast-1';
@@ -73,6 +78,15 @@ const isLostItem = (value: unknown): value is LostItem => {
     typeof value['currentPrice'] === 'number' &&
     typeof value['status'] === 'string' &&
     typeof value['endTime'] === 'string'
+  );
+};
+
+const isOrganization = (value: unknown): value is Organization => {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value['orgId'] === 'string' &&
+    typeof value['name'] === 'string' &&
+    typeof value['type'] === 'string'
   );
 };
 
@@ -385,24 +399,84 @@ const reservePickup = async (
   }
 
   const pickupCode = item.pickupCode ?? generatePickupCode();
+  const pickupBoxNumber = item.pickupBoxNumber ?? generateBoxNumber(itemId);
   await doc.send(
     new UpdateCommand({
       TableName: ITEMS_TABLE,
       Key: { itemId },
       UpdateExpression:
-        'SET pickupStatus = :reserved, pickupDate = :date, pickupCode = :code',
+        'SET pickupStatus = :reserved, pickupDate = :date, pickupCode = :code, pickupBoxNumber = :box',
       ExpressionAttributeValues: {
         ':reserved': 'reserved',
         ':date': date,
         ':code': pickupCode,
+        ':box': pickupBoxNumber,
       },
     }),
   );
 
-  return json(200, { pickupStatus: 'reserved', pickupDate: date, pickupCode });
+  return json(200, { pickupStatus: 'reserved', pickupDate: date, pickupCode, pickupBoxNumber });
+};
+
+// 無人ボックスがQRコード／認証コードを読み取り、購入者本人の操作で受け渡しを完了する
+const selfCompletePickup = async (
+  itemId: string,
+  user: AuthUser,
+): Promise<APIGatewayProxyResult> => {
+  const itemResult = await doc.send(
+    new GetCommand({ TableName: ITEMS_TABLE, Key: { itemId } }),
+  );
+  const item: unknown = itemResult.Item;
+  if (!isLostItem(item)) return json(404, { message: '出品が見つかりません' });
+  if (item.winnerSub !== user.sub) {
+    return json(403, { message: 'この物品の落札者ではありません' });
+  }
+  if (item.pickupStatus !== 'reserved') {
+    return json(409, { message: '受取予約が完了していないか、すでに受け渡し済みです' });
+  }
+
+  await doc.send(
+    new UpdateCommand({
+      TableName: ITEMS_TABLE,
+      Key: { itemId },
+      UpdateExpression: 'SET pickupStatus = :completed',
+      ExpressionAttributeValues: { ':completed': 'completed' },
+    }),
+  );
+  return json(200, { pickupStatus: 'completed' });
 };
 
 // ---------- 管理者API ----------
+
+// 拾得日から公告日・保管期間満了日を算出する（遺失物法の建付けを表現するための日数）
+const NOTICE_WINDOW_DAYS = 14;
+const CUSTODY_PERIOD_DAYS = 90;
+
+const addDays = (dateStr: string, days: number): string =>
+  new Date(new Date(dateStr).getTime() + days * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+
+const hashString = (value: string): number => {
+  let hash = 0;
+  for (const ch of value) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return hash;
+};
+
+// itemIdから決定的に整理番号を発行する（同じitemIdなら常に同じ番号）
+// 警察・自治体は遺失物法の「遺失物第X号」形式、企業は施設占有者拾得の管理番号形式にする
+const generateCaseNumber = (org: Organization, itemId: string, foundDate: string): string => {
+  const seq = (hashString(itemId) % 9000) + 1000;
+  if (org.type === 'police') {
+    const reiwaYear = new Date(foundDate).getFullYear() - 2018;
+    return `${org.name} 遺失物第${reiwaYear}-${seq}号`;
+  }
+  const year = new Date(foundDate).getFullYear();
+  return `${org.name} 拾得物管理番号 ${year}-${seq}`;
+};
+
+// 受取拠点の無人ボックス番号（1〜24番）をitemIdから決定的に発行する
+const generateBoxNumber = (itemId: string): number => (hashString(`box-${itemId}`) % 24) + 1;
 
 const parseAdminItemInput = (
   data: Record<string, unknown>,
@@ -416,6 +490,13 @@ const parseAdminItemInput = (
   const startPrice = data['startPrice'];
   const endTime = data['endTime'];
   const imageUrlRaw = data['imageUrl'];
+  const conditionRank = data['conditionRank'];
+  const quantity = data['quantity'];
+  const foundDate = data['foundDate'];
+  const accessoriesRaw = data['accessories'];
+  const sizeRaw = data['size'];
+  const colorRaw = data['color'];
+  const brandRaw = data['brand'];
 
   if (typeof title !== 'string' || title.trim() === '' || title.length > 60) {
     return '品名は1〜60文字で入力してください';
@@ -450,6 +531,22 @@ const parseAdminItemInput = (
   const imageUrl = typeof imageUrlRaw === 'string' && imageUrlRaw.trim() !== ''
     ? imageUrlRaw.trim()
     : undefined;
+  if (!isConditionRank(conditionRank)) {
+    return '状態ランクを選択してください';
+  }
+  if (
+    typeof quantity !== 'number' ||
+    !Number.isInteger(quantity) ||
+    quantity < 1 ||
+    quantity > 99
+  ) {
+    return '数量は1〜99の整数で入力してください';
+  }
+  if (typeof foundDate !== 'string' || Number.isNaN(new Date(foundDate).getTime())) {
+    return '拾得日を選択してください';
+  }
+  const toOptionalText = (raw: unknown): string | undefined =>
+    typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : undefined;
 
   return {
     title: title.trim(),
@@ -461,7 +558,56 @@ const parseAdminItemInput = (
     startPrice,
     endTime: new Date(endTime).toISOString(),
     imageUrl,
+    conditionRank,
+    quantity,
+    foundDate: new Date(foundDate).toISOString().slice(0, 10),
+    accessories: toOptionalText(accessoriesRaw),
+    size: toOptionalText(sizeRaw),
+    color: toOptionalText(colorRaw),
+    brand: toOptionalText(brandRaw),
   };
+};
+
+// ---------- 出品元（Organization）管理API ----------
+
+const adminListOrganizations = async (): Promise<APIGatewayProxyResult> => {
+  const result = await doc.send(new ScanCommand({ TableName: ORGANIZATIONS_TABLE }));
+  const organizations = (result.Items ?? []).filter(isOrganization);
+  organizations.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return json(200, { organizations });
+};
+
+const parseAdminOrgInput = (data: Record<string, unknown>): AdminOrgInput | string => {
+  const name = data['name'];
+  const type = data['type'];
+  const contactNoteRaw = data['contactNote'];
+
+  if (typeof name !== 'string' || name.trim() === '' || name.length > 40) {
+    return '出品元名は1〜40文字で入力してください';
+  }
+  if (!isOrgType(type)) return '出品元の種別を選択してください';
+  const contactNote =
+    typeof contactNoteRaw === 'string' && contactNoteRaw.trim() !== ''
+      ? contactNoteRaw.trim()
+      : undefined;
+
+  return { name: name.trim(), type, contactNote };
+};
+
+const adminCreateOrganization = async (body: string | null): Promise<APIGatewayProxyResult> => {
+  const data = parseBody(body);
+  if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
+  const input = parseAdminOrgInput(data);
+  if (typeof input === 'string') return json(400, { message: input });
+
+  const orgId = `org-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const organization: Organization = {
+    orgId,
+    ...input,
+    createdAt: new Date().toISOString(),
+  };
+  await doc.send(new PutCommand({ TableName: ORGANIZATIONS_TABLE, Item: organization }));
+  return json(201, { organization });
 };
 
 const adminCreateItem = async (body: string | null): Promise<APIGatewayProxyResult> => {
@@ -470,12 +616,29 @@ const adminCreateItem = async (body: string | null): Promise<APIGatewayProxyResu
   const input = parseAdminItemInput(data);
   if (typeof input === 'string') return json(400, { message: input });
 
+  const orgId = data['orgId'];
+  if (typeof orgId !== 'string' || orgId.trim() === '') {
+    return json(400, { message: '出品元を選択してください' });
+  }
+  const orgResult = await doc.send(
+    new GetCommand({ TableName: ORGANIZATIONS_TABLE, Key: { orgId } }),
+  );
+  const org: unknown = orgResult.Item;
+  if (!isOrganization(org)) return json(404, { message: '出品元が見つかりません' });
+
+  const itemId = `i-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const item: LostItem = {
-    itemId: `i-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    itemId,
     ...input,
     currentPrice: input.startPrice,
     bidCount: 0,
     status: 'active',
+    noticeDate: addDays(input.foundDate, NOTICE_WINDOW_DAYS),
+    custodyEndDate: addDays(input.foundDate, CUSTODY_PERIOD_DAYS),
+    caseNumber: generateCaseNumber(org, itemId, input.foundDate),
+    orgId: org.orgId,
+    orgName: org.name,
+    orgType: org.type,
   };
   await doc.send(new PutCommand({ TableName: ITEMS_TABLE, Item: item }));
   return json(201, { item });
@@ -506,6 +669,8 @@ const adminUpdateItem = async (
     ...existing,
     ...input,
     currentPrice: existing.bidCount === 0 ? input.startPrice : existing.currentPrice,
+    noticeDate: addDays(input.foundDate, NOTICE_WINDOW_DAYS),
+    custodyEndDate: addDays(input.foundDate, CUSTODY_PERIOD_DAYS),
   };
   await doc.send(new PutCommand({ TableName: ITEMS_TABLE, Item: updated }));
   return json(200, { item: updated });
@@ -804,6 +969,18 @@ export const handler = async (
     }
 
     if (
+      segments[1] === 'items' &&
+      segments.length === 4 &&
+      segments[3] === 'pickup-self-complete' &&
+      method === 'POST'
+    ) {
+      if (user === null) return json(401, { message: 'ログインが必要です' });
+      const itemId = segments[2];
+      if (itemId === undefined) return json(404, { message: 'Not Found' });
+      return await selfCompletePickup(decodeURIComponent(itemId), user);
+    }
+
+    if (
       segments[1] === 'me' &&
       segments[2] === 'wins' &&
       segments.length === 3 &&
@@ -823,6 +1000,10 @@ export const handler = async (
       }
       if (segments[2] === 'images' && segments[3] === 'upload-url' && segments.length === 4 && method === 'POST') {
         return await adminImageUploadUrl(event.body);
+      }
+      if (segments[2] === 'organizations' && segments.length === 3) {
+        if (method === 'GET') return await adminListOrganizations();
+        if (method === 'POST') return await adminCreateOrganization(event.body);
       }
       if (segments[2] === 'items' && segments.length === 3 && method === 'POST') {
         return await adminCreateItem(event.body);

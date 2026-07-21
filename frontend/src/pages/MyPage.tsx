@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import QRCode from 'qrcode';
-import { ApiError, fetchMyWins, postPickupReservation } from '../api';
+import { ApiError, fetchMyWins, postPickupReservation, postPickupSelfComplete } from '../api';
 import { useAuth } from '../auth/AuthContext';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { yen } from '../format';
@@ -32,9 +32,10 @@ const PickupQr = ({ itemId, code }: { itemId: string; code: string }): JSX.Eleme
 };
 
 type ReservationState = {
-  pickupStatus: 'reserved';
+  pickupStatus: 'reserved' | 'completed';
   pickupDate: string;
   pickupCode: string;
+  pickupBoxNumber: number;
 };
 
 const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
@@ -42,10 +43,12 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
   const [date, setDate] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
 
   const status = reservation?.pickupStatus ?? item.pickupStatus ?? 'awaiting';
   const pickupDate = reservation?.pickupDate ?? item.pickupDate;
   const pickupCode = reservation?.pickupCode ?? item.pickupCode;
+  const pickupBoxNumber = reservation?.pickupBoxNumber ?? item.pickupBoxNumber;
   const deadlineDay = dayOf(item.pickupDeadline);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -63,12 +66,32 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
           pickupStatus: 'reserved',
           pickupDate: result.pickupDate,
           pickupCode: result.pickupCode,
+          pickupBoxNumber: result.pickupBoxNumber,
         });
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : '予約に失敗しました');
       })
       .finally(() => setSubmitting(false));
+  };
+
+  const handleUnlock = (): void => {
+    setError(null);
+    setUnlocking(true);
+    postPickupSelfComplete(item.itemId)
+      .then(() => {
+        setReservation((prev) =>
+          prev !== null
+            ? { ...prev, pickupStatus: 'completed' }
+            : pickupDate !== undefined && pickupCode !== undefined && pickupBoxNumber !== undefined
+              ? { pickupStatus: 'completed', pickupDate, pickupCode, pickupBoxNumber }
+              : null,
+        );
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : '受け取り完了処理に失敗しました');
+      })
+      .finally(() => setUnlocking(false));
   };
 
   return (
@@ -95,13 +118,29 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
         ) : status === 'reserved' && pickupCode !== undefined ? (
           <div className="pickup-panel">
             <p className="pickup-panel__label">受取予約日: {pickupDate}</p>
+            {pickupBoxNumber !== undefined ? (
+              <p className="pickup-panel__label">受取ボックス番号: {pickupBoxNumber}番</p>
+            ) : null}
             <p className="pickup-panel__label">
-              受取拠点でこのコードまたはQRを提示してください
+              受取拠点の無人ボックスでこのコードまたはQRを読み取らせてください
             </p>
             <p className="pickup-code" aria-label={`受取コード ${pickupCode}`}>
               {pickupCode}
             </p>
             <PickupQr itemId={item.itemId} code={pickupCode} />
+            {error !== null ? (
+              <p className="field__error" role="alert">
+                {error}
+              </p>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={handleUnlock}
+              disabled={unlocking}
+            >
+              {unlocking ? '解錠中…' : 'ボックスを解錠する（受け取り完了）'}
+            </button>
           </div>
         ) : (
           <form className="pickup-form" onSubmit={handleReserve} noValidate>

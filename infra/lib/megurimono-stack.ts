@@ -13,6 +13,7 @@ import type { Construct } from 'constructs';
 
 export const ITEMS_TABLE_NAME = 'megurimono-items';
 export const BIDS_TABLE_NAME = 'megurimono-bids';
+export const ORGANIZATIONS_TABLE_NAME = 'megurimono-organizations';
 
 export class MeguriMonoStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -30,6 +31,14 @@ export class MeguriMonoStack extends cdk.Stack {
       tableName: BIDS_TABLE_NAME,
       partitionKey: { name: 'itemId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'bidId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // 出品元（警察・自治体／企業）マスタ
+    const organizationsTable = new dynamodb.Table(this, 'OrganizationsTable', {
+      tableName: ORGANIZATIONS_TABLE_NAME,
+      partitionKey: { name: 'orgId', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
@@ -80,6 +89,7 @@ export class MeguriMonoStack extends cdk.Stack {
       environment: {
         ITEMS_TABLE: itemsTable.tableName,
         BIDS_TABLE: bidsTable.tableName,
+        ORGANIZATIONS_TABLE: organizationsTable.tableName,
         USER_POOL_ID: userPool.userPoolId,
         USER_POOL_CLIENT_ID: userPoolClient.userPoolClientId,
       },
@@ -90,6 +100,7 @@ export class MeguriMonoStack extends cdk.Stack {
     });
     itemsTable.grantReadWriteData(apiFn);
     bidsTable.grantReadWriteData(apiFn);
+    organizationsTable.grantReadWriteData(apiFn);
 
     const api = new apigateway.LambdaRestApi(this, 'Api', {
       handler: apiFn,

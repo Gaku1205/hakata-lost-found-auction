@@ -146,6 +146,9 @@ export const SignUp = (): JSX.Element => {
         <p className="auth-alt">
           すでにアカウントをお持ちの方は <Link to="/login">ログイン</Link>
         </p>
+        <p className="auth-alt auth-alt--muted">
+          警察・JRなど「出品元」としてのご利用には、運営による本人確認のうえアカウント発行が必要です。事務局までお問い合わせください。
+        </p>
       </div>
     </div>
   );

@@ -2,6 +2,44 @@ export type ItemStatus = 'active' | 'sold';
 
 export type PickupStatus = 'awaiting' | 'reserved' | 'completed';
 
+export type ConditionRank = 'like_new' | 'good' | 'used' | 'damaged';
+
+export const CONDITION_LABELS: Record<ConditionRank, string> = {
+  like_new: '新品同様',
+  good: '良好',
+  used: '使用感あり',
+  damaged: '傷・汚れあり',
+};
+
+export const CONDITION_ORDER: readonly ConditionRank[] = ['like_new', 'good', 'used', 'damaged'];
+
+export const isConditionRank = (value: unknown): value is ConditionRank =>
+  typeof value === 'string' && value in CONDITION_LABELS;
+
+export type OrgType = 'police' | 'corporate';
+
+export const ORG_TYPE_LABELS: Record<OrgType, string> = {
+  police: '警察・自治体',
+  corporate: '民間施設',
+};
+
+export const isOrgType = (value: unknown): value is OrgType =>
+  typeof value === 'string' && value in ORG_TYPE_LABELS;
+
+export type Organization = {
+  orgId: string;
+  name: string;
+  type: OrgType;
+  contactNote?: string;
+  createdAt: string;
+};
+
+export type AdminOrgInput = {
+  name: string;
+  type: OrgType;
+  contactNote?: string;
+};
+
 export type ItemCategory =
   | 'umbrella'
   | 'wallet'
@@ -27,6 +65,19 @@ export type LostItem = {
   status: ItemStatus;
   endTime: string;
   imageUrl?: string;
+  conditionRank: ConditionRank;
+  quantity: number;
+  foundDate: string;
+  accessories?: string;
+  size?: string;
+  color?: string;
+  brand?: string;
+  caseNumber: string;
+  noticeDate: string;
+  custodyEndDate: string;
+  orgId: string;
+  orgName: string;
+  orgType: OrgType;
   winnerSub?: string;
   winnerNickname?: string;
   soldAt?: string;
@@ -34,6 +85,7 @@ export type LostItem = {
   pickupDate?: string;
   pickupCode?: string;
   pickupDeadline?: string;
+  pickupBoxNumber?: number;
 };
 
 export type Bid = {
@@ -122,6 +174,13 @@ export type AdminItemInput = {
   startPrice: number;
   endTime: string;
   imageUrl?: string;
+  conditionRank: ConditionRank;
+  quantity: number;
+  foundDate: string;
+  accessories?: string;
+  size?: string;
+  color?: string;
+  brand?: string;
 };
 
 export const CATEGORY_LABELS: Record<ItemCategory, string> = {

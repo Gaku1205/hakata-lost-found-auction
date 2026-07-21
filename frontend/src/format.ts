@@ -40,3 +40,12 @@ export const formatFoundMonth = (foundMonth: string): string => {
   if (Number.isNaN(monthNumber)) return foundMonth;
   return `${year}年${monthNumber}月ごろ`;
 };
+
+export const formatDate = (dateStr: string): string => {
+  const [year, month, day] = dateStr.split('-');
+  if (year === undefined || month === undefined || day === undefined) return dateStr;
+  const monthNumber = Number.parseInt(month, 10);
+  const dayNumber = Number.parseInt(day, 10);
+  if (Number.isNaN(monthNumber) || Number.isNaN(dayNumber)) return dateStr;
+  return `${year}年${monthNumber}月${dayNumber}日`;
+};

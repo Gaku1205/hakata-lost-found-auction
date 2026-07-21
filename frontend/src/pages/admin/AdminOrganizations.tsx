@@ -1,0 +1,152 @@
+import { useState } from 'react';
+import { ApiError, adminCreateOrganization, adminListOrganizations } from '../../api';
+import { formatDate } from '../../format';
+import { useLoadable } from '../../hooks';
+import type { OrgType } from '../../types';
+import { ORG_TYPE_LABELS } from '../../types';
+import { AdminTabs } from './AdminTabs';
+
+type FormState = {
+  name: string;
+  type: OrgType;
+  contactNote: string;
+};
+
+const INITIAL_FORM: FormState = { name: '', type: 'police', contactNote: '' };
+
+export const AdminOrganizations = (): JSX.Element => {
+  const [result, reload] = useLoadable(() => adminListOrganizations(), []);
+  const [form, setForm] = useState<FormState>(INITIAL_FORM);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    setError(null);
+    if (form.name.trim() === '') {
+      setError('出品元名を入力してください');
+      return;
+    }
+    setSubmitting(true);
+    adminCreateOrganization({
+      name: form.name.trim(),
+      type: form.type,
+      contactNote: form.contactNote.trim() === '' ? undefined : form.contactNote.trim(),
+    })
+      .then(() => {
+        setForm(INITIAL_FORM);
+        reload();
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : '登録に失敗しました');
+      })
+      .finally(() => setSubmitting(false));
+  };
+
+  return (
+    <div className="container section">
+      <div className="admin-head">
+        <div>
+          <h1 className="page-title">管理画面 — 出品元管理</h1>
+          <p className="page-lead">
+            警察・自治体や企業など、出品元アカウントは運営が本人確認のうえ代理登録します。
+          </p>
+        </div>
+      </div>
+      <AdminTabs />
+
+      <div className="admin-org-layout">
+        <form className="admin-org-form" onSubmit={handleSubmit} noValidate>
+          <h2 className="panel__heading">＋ 出品元を追加</h2>
+          <div className="field">
+            <label htmlFor="org-name">出品元名</label>
+            <input
+              id="org-name"
+              type="text"
+              maxLength={40}
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              required
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="org-type">種別</label>
+            <select
+              id="org-type"
+              value={form.type}
+              onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as OrgType }))}
+            >
+              {(Object.entries(ORG_TYPE_LABELS) as [OrgType, string][]).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="org-contact">本人確認・担当者メモ（任意）</label>
+            <textarea
+              id="org-contact"
+              rows={2}
+              value={form.contactNote}
+              onChange={(e) => setForm((f) => ({ ...f, contactNote: e.target.value }))}
+            />
+            <p className="field__help">運営内部の記録用です。一般公開はされません。</p>
+          </div>
+          {error !== null ? (
+            <p className="field__error" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <button type="submit" className="btn btn--primary" disabled={submitting}>
+            {submitting ? '登録中…' : '出品元を登録する'}
+          </button>
+        </form>
+
+        <div className="table-wrap">
+          {result.state === 'loading' ? (
+            <div className="tiles" aria-busy="true">
+              {Array.from({ length: 2 }, (_, i) => (
+                <div key={i} className="tile tile--skeleton" aria-hidden="true" />
+              ))}
+            </div>
+          ) : null}
+
+          {result.state === 'error' ? (
+            <div className="notice notice--error" role="alert">
+              <p>{result.message}</p>
+              <button type="button" className="btn btn--ghost" onClick={reload}>
+                再読み込み
+              </button>
+            </div>
+          ) : null}
+
+          {result.state === 'ready' ? (
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>出品元名</th>
+                  <th>種別</th>
+                  <th>登録日</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.data.organizations.map((org) => (
+                  <tr key={org.orgId}>
+                    <td data-label="出品元名">{org.name}</td>
+                    <td data-label="種別">
+                      <span className={`org-badge org-badge--${org.type}`}>
+                        {ORG_TYPE_LABELS[org.type]}
+                      </span>
+                    </td>
+                    <td data-label="登録日">{formatDate(org.createdAt.slice(0, 10))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+};

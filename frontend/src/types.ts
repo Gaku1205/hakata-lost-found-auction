@@ -26,6 +26,7 @@ export type LostItem = {
   bidCount: number;
   status: ItemStatus;
   endTime: string;
+  imageUrl?: string;
   winnerSub?: string;
   winnerNickname?: string;
   soldAt?: string;
@@ -120,6 +121,7 @@ export type AdminItemInput = {
   pickupLocation: string;
   startPrice: number;
   endTime: string;
+  imageUrl?: string;
 };
 
 export const CATEGORY_LABELS: Record<ItemCategory, string> = {

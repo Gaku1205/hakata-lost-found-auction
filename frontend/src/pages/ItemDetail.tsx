@@ -204,7 +204,11 @@ export const ItemDetail = (): JSX.Element => {
             className={`detail__media${isClosed ? ' detail__media--closed' : ''}`}
             aria-hidden="true"
           >
-            <CategoryIcon category={item.category} size={96} />
+            {item.imageUrl !== undefined ? (
+              <img className="detail__media-img" src={item.imageUrl} alt="" loading="lazy" />
+            ) : (
+              <CategoryIcon category={item.category} size={96} />
+            )}
             {isClosed ? <span className="card__badge">落札済み</span> : null}
           </div>
           <span className="chip">{CATEGORY_LABELS[item.category]}</span>

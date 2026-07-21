@@ -248,3 +248,18 @@ export const adminDeleteItem = (itemId: string): Promise<unknown> =>
 
 export const adminFetchBidMonitor = (): Promise<BidMonitor> =>
   request('/api/admin/bid-monitor', isBidMonitor);
+
+type ImageUploadUrlResponse = { uploadUrl: string; imageUrl: string };
+
+const isImageUploadUrlResponse = (value: unknown): value is ImageUploadUrlResponse =>
+  isRecord(value) && typeof value.uploadUrl === 'string' && typeof value.imageUrl === 'string';
+
+export const adminRequestImageUploadUrl = (
+  itemId: string,
+  contentType: string,
+): Promise<ImageUploadUrlResponse> =>
+  request(
+    '/api/admin/images/upload-url',
+    isImageUploadUrlResponse,
+    jsonInit('POST', { itemId, contentType }),
+  );

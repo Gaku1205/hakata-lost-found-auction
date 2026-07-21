@@ -10,6 +10,8 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { authenticate, type AuthUser } from './auth';
 import {
   isItemCategory,
@@ -27,8 +29,17 @@ const BIDS_TABLE = process.env.BIDS_TABLE ?? '';
 const USER_POOL_ID = process.env.USER_POOL_ID ?? '';
 const USER_POOL_CLIENT_ID = process.env.USER_POOL_CLIENT_ID ?? '';
 const REGION = process.env.AWS_REGION ?? 'ap-northeast-1';
+const IMAGES_BUCKET = process.env.IMAGES_BUCKET ?? '';
 
 const PICKUP_DEADLINE_DAYS = 14;
+
+// 商品画像アップロード
+const UPLOAD_URL_EXPIRY_SECONDS = 300;
+const ALLOWED_IMAGE_TYPES: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+};
 
 // 吊り上げ・不正入札対策のパラメータ
 const EXTENSION_WINDOW_MS = 5 * 60 * 1000; // 残りこの時間未満の入札で自動延長
@@ -40,6 +51,7 @@ const RAPID_BID_WINDOW_MS = 10 * 60 * 1000; // この時間内にあれば連続
 const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
   marshallOptions: { removeUndefinedValues: true },
 });
+const s3 = new S3Client({});
 
 const json = (statusCode: number, body: unknown): APIGatewayProxyResult => ({
   statusCode,
@@ -403,6 +415,7 @@ const parseAdminItemInput = (
   const pickupLocation = data['pickupLocation'];
   const startPrice = data['startPrice'];
   const endTime = data['endTime'];
+  const imageUrlRaw = data['imageUrl'];
 
   if (typeof title !== 'string' || title.trim() === '' || title.length > 60) {
     return '品名は1〜60文字で入力してください';
@@ -431,6 +444,13 @@ const parseAdminItemInput = (
   if (typeof endTime !== 'string' || Number.isNaN(new Date(endTime).getTime())) {
     return '終了日時を選択してください';
   }
+  if (imageUrlRaw !== undefined && typeof imageUrlRaw !== 'string') {
+    return '画像URLが不正です';
+  }
+  const imageUrl = typeof imageUrlRaw === 'string' && imageUrlRaw.trim() !== ''
+    ? imageUrlRaw.trim()
+    : undefined;
+
   return {
     title: title.trim(),
     category,
@@ -440,6 +460,7 @@ const parseAdminItemInput = (
     pickupLocation: pickupLocation.trim(),
     startPrice,
     endTime: new Date(endTime).toISOString(),
+    imageUrl,
   };
 };
 
@@ -566,6 +587,32 @@ const adminCompletePickup = async (
     }),
   );
   return json(200, { pickupStatus: 'completed' });
+};
+
+const adminImageUploadUrl = async (body: string | null): Promise<APIGatewayProxyResult> => {
+  const data = parseBody(body);
+  if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
+
+  const itemId = data['itemId'];
+  const contentType = data['contentType'];
+  if (typeof itemId !== 'string' || !/^[a-zA-Z0-9-]+$/.test(itemId)) {
+    return json(400, { message: '出品IDが不正です' });
+  }
+  if (typeof contentType !== 'string' || !(contentType in ALLOWED_IMAGE_TYPES)) {
+    return json(400, { message: '画像形式はJPEG・PNG・WEBPのいずれかにしてください' });
+  }
+
+  const ext = ALLOWED_IMAGE_TYPES[contentType];
+  // CloudFrontはパスをそのままS3オブジェクトキーとして origin に転送するため、
+  // キー自体に配信パス（uploads/）を含めておく。
+  const key = `uploads/items/${itemId}/${Date.now()}.${ext}`;
+  const uploadUrl = await getSignedUrl(
+    s3,
+    new PutObjectCommand({ Bucket: IMAGES_BUCKET, Key: key, ContentType: contentType }),
+    { expiresIn: UPLOAD_URL_EXPIRY_SECONDS },
+  );
+
+  return json(200, { uploadUrl, imageUrl: `/${key}` });
 };
 
 const isBidRecord = (value: unknown): value is Bid =>
@@ -773,6 +820,9 @@ export const handler = async (
 
       if (segments[2] === 'bid-monitor' && segments.length === 3 && method === 'GET') {
         return await adminBidMonitor();
+      }
+      if (segments[2] === 'images' && segments[3] === 'upload-url' && segments.length === 4 && method === 'POST') {
+        return await adminImageUploadUrl(event.body);
       }
       if (segments[2] === 'items' && segments.length === 3 && method === 'POST') {
         return await adminCreateItem(event.body);

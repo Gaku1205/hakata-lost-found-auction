@@ -21,7 +21,11 @@ export const ItemCard = ({ item, nowMs, index }: Props): JSX.Element => {
       style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
     >
       <div className="card__media" aria-hidden="true">
-        <CategoryIcon category={item.category} />
+        {item.imageUrl !== undefined ? (
+          <img className="card__media-img" src={item.imageUrl} alt="" loading="lazy" />
+        ) : (
+          <CategoryIcon category={item.category} />
+        )}
         {isClosed ? (
           <span className="card__badge">落札済み</span>
         ) : (

@@ -455,8 +455,21 @@ button {
   display: grid;
   place-items: center;
   height: 128px;
+  overflow: hidden;
   background: linear-gradient(150deg, #f2f5fc 0%, var(--c-indigo-tint) 55%, #e5eaf7 100%);
   color: var(--c-indigo);
+}
+
+.card__media-img {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 220ms ease-out;
+}
+
+.card:hover .card__media-img {
+  transform: scale(1.04);
 }
 
 .card__time-pill {
@@ -696,8 +709,16 @@ button {
   place-items: center;
   height: 240px;
   border-radius: var(--radius);
+  overflow: hidden;
   background: var(--c-indigo-tint);
   color: var(--c-indigo);
+}
+
+.detail__media-img {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .detail__media--closed {
@@ -856,6 +877,42 @@ button {
 .field__error {
   font-size: 14px;
   color: var(--c-red);
+}
+
+.image-upload {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.image-upload__preview {
+  width: 120px;
+  height: 90px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--c-border);
+  background: var(--c-indigo-tint);
+}
+
+.image-upload__placeholder {
+  display: grid;
+  place-items: center;
+  width: 120px;
+  height: 90px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--c-border);
+  background: var(--c-indigo-tint);
+  color: var(--c-sub);
+  font-size: 12px;
+  text-align: center;
+}
+
+.image-upload__controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
 }
 
 .quick-bids {
@@ -1096,6 +1153,29 @@ button {
 .site-footer__note {
   margin-top: 6px;
   font-size: 12px;
+}
+
+.credits {
+  margin-top: 12px;
+}
+
+.credits summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--c-sub);
+}
+
+.credits__list {
+  margin-top: 8px;
+  padding-left: 18px;
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--c-sub);
+}
+
+.credits__list a {
+  color: inherit;
+  text-decoration: underline;
 }
 
 /* ---------- ユーティリティ ---------- */

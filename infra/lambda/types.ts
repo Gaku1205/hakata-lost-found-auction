@@ -26,6 +26,7 @@ export type LostItem = {
   bidCount: number;
   status: ItemStatus;
   endTime: string;
+  imageUrl?: string;
   topBidderSub?: string;
   // 落札後のみ設定されるフィールド
   winnerSub?: string;
@@ -100,4 +101,5 @@ export type AdminItemInput = {
   pickupLocation: string;
   startPrice: number;
   endTime: string;
+  imageUrl?: string;
 };

@@ -111,6 +111,26 @@ export class MeguriMonoStack extends cdk.Stack {
       autoDeleteObjects: true,
     });
 
+    // ---------- 商品画像（管理者アップロード用） ----------
+    // siteBucket とは分離: BucketDeployment はデフォルトで prune するため、
+    // 同居させるとフロントエンド再デプロイ時にアップロード画像が消えてしまう。
+    const imagesBucket = new s3.Bucket(this, 'ImagesBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      cors: [
+        {
+          allowedMethods: [s3.HttpMethods.PUT],
+          allowedOrigins: ['*'],
+          allowedHeaders: ['*'],
+          maxAge: 3000,
+        },
+      ],
+    });
+    imagesBucket.grantPut(apiFn);
+    apiFn.addEnvironment('IMAGES_BUCKET', imagesBucket.bucketName);
+
     const csp = [
       "default-src 'self'",
       "script-src 'self'",
@@ -187,6 +207,14 @@ function handler(event) {
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
           originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        },
+        // 静的デモ画像（frontend/public 経由で siteBucket に同梱）は既定ビヘイビアの
+        // /images/* が担当するため、管理者アップロード画像は別パスに分離する。
+        '/uploads/*': {
+          origin: origins.S3BucketOrigin.withOriginAccessControl(imagesBucket),
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+          compress: true,
         },
       },
     });

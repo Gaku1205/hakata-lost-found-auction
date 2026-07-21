@@ -367,6 +367,7 @@ const buildItems = (
       bidCount: seed.bidCount,
       status: seed.status,
       endTime: at(seed.endOffsetMs),
+      imageUrl: `/images/items/${seed.itemId}.jpg`,
       topBidderSub: topBidderByItem.get(seed.itemId),
     };
     if (seed.status !== 'sold') return base;

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ApiError,
   adminCreateItem,
+  adminRequestImageUploadUrl,
   adminUpdateItem,
   fetchItemDetail,
 } from '../../api';
@@ -39,6 +40,9 @@ const isoToLocalInput = (iso: string): string => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
 const INITIAL_FORM: FormState = {
   title: '',
   category: 'umbrella',
@@ -59,6 +63,13 @@ export const AdminItemForm = (): JSX.Element => {
   const [loading, setLoading] = useState(isEdit);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+
+  const [originalImageUrl, setOriginalImageUrl] = useState<string | undefined>(undefined);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageRemoved, setImageRemoved] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isEdit) return;
@@ -76,6 +87,8 @@ export const AdminItemForm = (): JSX.Element => {
           startPrice: String(item.startPrice),
           endTimeLocal: isoToLocalInput(item.endTime),
         });
+        setOriginalImageUrl(item.imageUrl);
+        setImagePreview(item.imageUrl ?? null);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -90,6 +103,37 @@ export const AdminItemForm = (): JSX.Element => {
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]): void => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (file === undefined) return;
+    setImageError(null);
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+      setImageError('JPEG・PNG・WEBP形式の画像を選択してください');
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setImageError('画像サイズは5MB以内にしてください');
+      return;
+    }
+    if (imagePreview !== null && imageFile !== null) {
+      URL.revokeObjectURL(imagePreview);
+    }
+    setImageFile(file);
+    setImageRemoved(false);
+    setImagePreview(URL.createObjectURL(file));
+  };
+
+  const handleRemoveImage = (): void => {
+    if (imagePreview !== null && imageFile !== null) {
+      URL.revokeObjectURL(imagePreview);
+    }
+    setImageFile(null);
+    setImagePreview(null);
+    setImageRemoved(true);
+    setImageError(null);
   };
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
@@ -111,7 +155,7 @@ export const AdminItemForm = (): JSX.Element => {
       return;
     }
 
-    const input: AdminItemInput = {
+    const baseInput: AdminItemInput = {
       title: form.title,
       category: form.category,
       description: form.description,
@@ -123,15 +167,54 @@ export const AdminItemForm = (): JSX.Element => {
     };
 
     setSubmitting(true);
-    const action = isEdit
-      ? adminUpdateItem(itemId, input)
-      : adminCreateItem(input);
-    action
-      .then(() => navigate('/admin', { replace: true }))
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : '保存に失敗しました');
+
+    void (async () => {
+      try {
+        let currentItemId = itemId;
+        if (!isEdit) {
+          const { item: created } = await adminCreateItem(baseInput);
+          currentItemId = created.itemId;
+        }
+        if (currentItemId === undefined) {
+          throw new Error('出品IDの取得に失敗しました');
+        }
+
+        let resolvedImageUrl = imageRemoved ? undefined : originalImageUrl;
+        if (imageFile !== null) {
+          setUploadingImage(true);
+          const { uploadUrl, imageUrl } = await adminRequestImageUploadUrl(
+            currentItemId,
+            imageFile.type,
+          );
+          const putResponse = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': imageFile.type },
+            body: imageFile,
+          });
+          if (!putResponse.ok) {
+            throw new Error('画像のアップロードに失敗しました');
+          }
+          resolvedImageUrl = imageUrl;
+          setUploadingImage(false);
+        }
+
+        if (isEdit || imageFile !== null || imageRemoved) {
+          await adminUpdateItem(currentItemId, { ...baseInput, imageUrl: resolvedImageUrl });
+        }
+
+        navigate('/admin', { replace: true });
+      } catch (err: unknown) {
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : '保存に失敗しました',
+        );
         setSubmitting(false);
-      });
+        setUploadingImage(false);
+      }
+    })();
   };
 
   if (loading) {
@@ -164,6 +247,44 @@ export const AdminItemForm = (): JSX.Element => {
               onChange={(e) => set('title', e.target.value)}
               required
             />
+          </div>
+
+          <div className="field">
+            <label htmlFor="form-image">商品画像</label>
+            <div className="image-upload">
+              {imagePreview !== null ? (
+                <img src={imagePreview} alt="" className="image-upload__preview" />
+              ) : (
+                <div className="image-upload__placeholder" aria-hidden="true">
+                  画像未設定
+                </div>
+              )}
+              <div className="image-upload__controls">
+                <input
+                  id="form-image"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={handleFileChange}
+                />
+                {imagePreview !== null ? (
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--small"
+                    onClick={handleRemoveImage}
+                  >
+                    画像を削除
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            {imageError !== null ? (
+              <p className="field__error" role="alert">
+                {imageError}
+              </p>
+            ) : null}
+            <p className="field__help">
+              JPEG・PNG・WEBP、5MBまで。未設定の場合はカテゴリアイコンが表示されます
+            </p>
           </div>
 
           <div className="form-grid">
@@ -269,7 +390,13 @@ export const AdminItemForm = (): JSX.Element => {
           ) : null}
 
           <button type="submit" className="btn btn--primary" disabled={submitting}>
-            {submitting ? '保存中…' : isEdit ? '変更を保存' : '出品する'}
+            {uploadingImage
+              ? '画像アップロード中…'
+              : submitting
+                ? '保存中…'
+                : isEdit
+                  ? '変更を保存'
+                  : '出品する'}
           </button>
         </form>
       </div>

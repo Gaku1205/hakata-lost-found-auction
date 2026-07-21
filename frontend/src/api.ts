@@ -1,4 +1,12 @@
-import type { Bid, LostItem, Stats } from './types';
+import { getCurrentIdToken } from './auth/tokenStore';
+import type {
+  AdminItemInput,
+  Bid,
+  LostItem,
+  PickupStatus,
+  SearchQuery,
+  Stats,
+} from './types';
 import { isItemCategory } from './types';
 
 export class ApiError extends Error {
@@ -45,9 +53,23 @@ const isStats = (value: unknown): value is Stats =>
   typeof value.soldTotal === 'number' &&
   typeof value.activeBidTotal === 'number';
 
+export type AuthConfig = { userPoolId: string; clientId: string; region: string };
+
+const isAuthConfig = (value: unknown): value is AuthConfig =>
+  isRecord(value) &&
+  typeof value.userPoolId === 'string' &&
+  typeof value.clientId === 'string' &&
+  typeof value.region === 'string';
+
 type ItemsResponse = { items: LostItem[] };
 type ItemDetailResponse = { item: LostItem; bids: Bid[] };
 type BidResponse = { currentPrice: number; bid: Bid };
+type ItemResponse = { item: LostItem };
+type PickupReservationResponse = {
+  pickupStatus: PickupStatus;
+  pickupDate: string;
+  pickupCode: string;
+};
 
 const isItemsResponse = (value: unknown): value is ItemsResponse =>
   isRecord(value) && Array.isArray(value.items) && value.items.every(isLostItem);
@@ -61,6 +83,17 @@ const isItemDetailResponse = (value: unknown): value is ItemDetailResponse =>
 const isBidResponse = (value: unknown): value is BidResponse =>
   isRecord(value) && typeof value.currentPrice === 'number' && isBid(value.bid);
 
+const isItemResponse = (value: unknown): value is ItemResponse =>
+  isRecord(value) && isLostItem(value.item);
+
+const isPickupReservationResponse = (value: unknown): value is PickupReservationResponse =>
+  isRecord(value) &&
+  (value.pickupStatus === 'reserved' || value.pickupStatus === 'completed') &&
+  typeof value.pickupDate === 'string' &&
+  typeof value.pickupCode === 'string';
+
+const isAnything = (_value: unknown): _value is unknown => true;
+
 const hasMessage = (value: unknown): value is { message: string } =>
   isRecord(value) && typeof value.message === 'string';
 
@@ -69,9 +102,15 @@ const request = async <T>(
   guard: (value: unknown) => value is T,
   init?: RequestInit,
 ): Promise<T> => {
+  const token = getCurrentIdToken();
+  const headers = new Headers(init?.headers);
+  if (token !== null) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
   let response: Response;
   try {
-    response = await fetch(path, init);
+    response = await fetch(path, { ...init, headers });
   } catch {
     throw new ApiError('通信に失敗しました。接続を確認して再度お試しください', 0);
   }
@@ -88,20 +127,87 @@ const request = async <T>(
   return data;
 };
 
-export const fetchItems = (): Promise<ItemsResponse> =>
-  request('/api/items', isItemsResponse);
+const jsonInit = (method: string, body: unknown): RequestInit => ({
+  method,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
+
+// ---------- 公開 ----------
+
+export const fetchConfig = (): Promise<AuthConfig> => request('/api/config', isAuthConfig);
+
+export const buildSearchParams = (query: SearchQuery): string => {
+  const params = new URLSearchParams();
+  if (query.q !== '') params.set('q', query.q);
+  if (query.category !== '') params.set('category', query.category);
+  if (query.status !== '') params.set('status', query.status);
+  if (query.minPrice !== '') params.set('minPrice', query.minPrice);
+  if (query.maxPrice !== '') params.set('maxPrice', query.maxPrice);
+  if (query.sort !== 'end_asc') params.set('sort', query.sort);
+  return params.toString();
+};
+
+export const fetchItems = (query?: SearchQuery): Promise<ItemsResponse> => {
+  const qs = query === undefined ? '' : buildSearchParams(query);
+  return request(`/api/items${qs === '' ? '' : `?${qs}`}`, isItemsResponse);
+};
 
 export const fetchItemDetail = (itemId: string): Promise<ItemDetailResponse> =>
   request(`/api/items/${encodeURIComponent(itemId)}`, isItemDetailResponse);
 
-export const postBid = (
+export const fetchStats = (): Promise<Stats> => request('/api/stats', isStats);
+
+// ---------- 認証つき（一般） ----------
+
+export const postBid = (itemId: string, amount: number): Promise<BidResponse> =>
+  request(
+    `/api/items/${encodeURIComponent(itemId)}/bids`,
+    isBidResponse,
+    jsonInit('POST', { amount }),
+  );
+
+export const fetchMyWins = (): Promise<ItemsResponse> =>
+  request('/api/me/wins', isItemsResponse);
+
+export const postPickupReservation = (
   itemId: string,
-  payload: { bidderName: string; amount: number },
-): Promise<BidResponse> =>
-  request(`/api/items/${encodeURIComponent(itemId)}/bids`, isBidResponse, {
+  date: string,
+): Promise<PickupReservationResponse> =>
+  request(
+    `/api/items/${encodeURIComponent(itemId)}/pickup-reservation`,
+    isPickupReservationResponse,
+    jsonInit('POST', { date }),
+  );
+
+// ---------- 管理者 ----------
+
+export const adminCreateItem = (input: AdminItemInput): Promise<ItemResponse> =>
+  request('/api/admin/items', isItemResponse, jsonInit('POST', input));
+
+export const adminUpdateItem = (
+  itemId: string,
+  input: AdminItemInput,
+): Promise<ItemResponse> =>
+  request(
+    `/api/admin/items/${encodeURIComponent(itemId)}`,
+    isItemResponse,
+    jsonInit('PUT', input),
+  );
+
+export const adminCloseItem = (itemId: string): Promise<ItemResponse> =>
+  request(`/api/admin/items/${encodeURIComponent(itemId)}/close`, isItemResponse, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
   });
 
-export const fetchStats = (): Promise<Stats> => request('/api/stats', isStats);
+export const adminCompletePickup = (itemId: string, code: string): Promise<unknown> =>
+  request(
+    `/api/admin/items/${encodeURIComponent(itemId)}/pickup-complete`,
+    isAnything,
+    jsonInit('POST', { code }),
+  );
+
+export const adminDeleteItem = (itemId: string): Promise<unknown> =>
+  request(`/api/admin/items/${encodeURIComponent(itemId)}`, isAnything, {
+    method: 'DELETE',
+  });

@@ -9,9 +9,12 @@
     "seed": "tsx scripts/seed-data.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudformation": "^3.700.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.700.0",
     "@aws-sdk/client-dynamodb": "^3.700.0",
     "@aws-sdk/lib-dynamodb": "^3.700.0",
     "aws-cdk-lib": "^2.170.0",
+    "aws-jwt-verify": "^4.0.1",
     "constructs": "^10.4.2"
   },
   "devDependencies": {

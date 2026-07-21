@@ -1,18 +1,41 @@
+import { CloudFormationClient, DescribeStacksCommand } from '@aws-sdk/client-cloudformation';
+import {
+  AdminAddUserToGroupCommand,
+  AdminCreateUserCommand,
+  AdminGetUserCommand,
+  AdminSetUserPasswordCommand,
+  CognitoIdentityProviderClient,
+  UserNotFoundException,
+} from '@aws-sdk/client-cognito-identity-provider';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
   BatchWriteCommand,
   DynamoDBDocumentClient,
   ScanCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { Bid, ItemCategory, ItemStatus, LostItem } from '../lambda/types';
+import type { Bid, ItemCategory, ItemStatus, LostItem, PickupStatus } from '../lambda/types';
 
 const ITEMS_TABLE = 'megurimono-items';
 const BIDS_TABLE = 'megurimono-bids';
 const REGION = 'ap-northeast-1';
+const STACK_NAME = 'MeguriMonoStack';
+
+const DEMO_USER = {
+  email: 'demo@example.com',
+  password: 'REDACTED_DEMO_PASSWORD',
+  nickname: 'はかた太郎',
+};
+const ADMIN_USER = {
+  email: 'admin@example.com',
+  password: 'REDACTED_ADMIN_PASSWORD',
+  nickname: '運営局',
+};
 
 const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }), {
   marshallOptions: { removeUndefinedValues: true },
 });
+const cfn = new CloudFormationClient({ region: REGION });
+const cognito = new CognitoIdentityProviderClient({ region: REGION });
 
 const HOURS = 60 * 60 * 1000;
 const DAYS = 24 * HOURS;
@@ -20,8 +43,13 @@ const now = Date.now();
 
 const at = (offsetMs: number): string => new Date(now + offsetMs).toISOString();
 
+const PICKUP_LOCATIONS = [
+  '博多区役所 1F 受取窓口',
+  '上川端商店街 受取ステーション',
+  '博多市民センター 受付',
+] as const;
+
 const BIDDER_NAMES = [
-  'はかたっ子',
   'めんたい太郎',
   '中洲のカモメ',
   'つばめ号',
@@ -31,7 +59,75 @@ const BIDDER_NAMES = [
   'ベイサイド走者',
   'どんたく囃子',
   '祇園の風',
-];
+] as const;
+
+// ---------- Cognito ----------
+
+const getUserPoolId = async (): Promise<string> => {
+  const result = await cfn.send(new DescribeStacksCommand({ StackName: STACK_NAME }));
+  const outputs = result.Stacks?.[0]?.Outputs ?? [];
+  const output = outputs.find((o) => o.OutputKey === 'UserPoolId');
+  if (output?.OutputValue === undefined) {
+    throw new Error(`CloudFormation出力 UserPoolId が見つかりません（stack: ${STACK_NAME}）`);
+  }
+  return output.OutputValue;
+};
+
+type SeedUser = { email: string; password: string; nickname: string };
+
+const ensureUser = async (
+  userPoolId: string,
+  user: SeedUser,
+  group?: string,
+): Promise<string> => {
+  const getSub = (attributes: { Name?: string; Value?: string }[] | undefined): string => {
+    const sub = attributes?.find((a) => a.Name === 'sub')?.Value;
+    if (sub === undefined) throw new Error(`ユーザー ${user.email} の sub を取得できません`);
+    return sub;
+  };
+
+  try {
+    const existing = await cognito.send(
+      new AdminGetUserCommand({ UserPoolId: userPoolId, Username: user.email }),
+    );
+    return getSub(existing.UserAttributes);
+  } catch (error: unknown) {
+    if (!(error instanceof UserNotFoundException)) throw error;
+  }
+
+  const created = await cognito.send(
+    new AdminCreateUserCommand({
+      UserPoolId: userPoolId,
+      Username: user.email,
+      MessageAction: 'SUPPRESS',
+      UserAttributes: [
+        { Name: 'email', Value: user.email },
+        { Name: 'email_verified', Value: 'true' },
+        { Name: 'nickname', Value: user.nickname },
+      ],
+    }),
+  );
+  await cognito.send(
+    new AdminSetUserPasswordCommand({
+      UserPoolId: userPoolId,
+      Username: user.email,
+      Password: user.password,
+      Permanent: true,
+    }),
+  );
+  if (group !== undefined) {
+    await cognito.send(
+      new AdminAddUserToGroupCommand({
+        UserPoolId: userPoolId,
+        Username: user.email,
+        GroupName: group,
+      }),
+    );
+  }
+  return getSub(created.User?.Attributes);
+};
+
+// ---------- アイテム・入札 ----------
 
 type SeedDef = {
   itemId: string;
@@ -45,6 +141,9 @@ type SeedDef = {
   bidCount: number;
   status: ItemStatus;
   endOffsetMs: number;
+  pickupStatus?: PickupStatus;
+  pickupDate?: string;
+  pickupCode?: string;
 };
 
 const SEEDS: readonly SeedDef[] = [
@@ -203,6 +302,7 @@ const SEEDS: readonly SeedDef[] = [
     bidCount: 12,
     status: 'sold',
     endOffsetMs: -3 * DAYS,
+    pickupStatus: 'awaiting',
   },
   {
     itemId: 'i-013',
@@ -216,6 +316,9 @@ const SEEDS: readonly SeedDef[] = [
     bidCount: 9,
     status: 'sold',
     endOffsetMs: -5 * DAYS,
+    pickupStatus: 'reserved',
+    pickupDate: new Date(now + 2 * DAYS).toISOString().slice(0, 10),
+    pickupCode: '384912',
   },
   {
     itemId: 'i-014',
@@ -229,25 +332,42 @@ const SEEDS: readonly SeedDef[] = [
     bidCount: 8,
     status: 'sold',
     endOffsetMs: -7 * DAYS,
+    pickupStatus: 'completed',
+    pickupDate: new Date(now - 2 * DAYS).toISOString().slice(0, 10),
+    pickupCode: '551208',
   },
 ];
 
-const buildItems = (): LostItem[] =>
-  SEEDS.map((seed) => ({
-    itemId: seed.itemId,
-    title: seed.title,
-    category: seed.category,
-    description: seed.description,
-    foundLocation: seed.foundLocation,
-    foundMonth: seed.foundMonth,
-    startPrice: seed.startPrice,
-    currentPrice: seed.currentPrice,
-    bidCount: seed.bidCount,
-    status: seed.status,
-    endTime: at(seed.endOffsetMs),
-  }));
+const buildItems = (demoUserSub: string): LostItem[] =>
+  SEEDS.map((seed, index) => {
+    const base: LostItem = {
+      itemId: seed.itemId,
+      title: seed.title,
+      category: seed.category,
+      description: seed.description,
+      foundLocation: seed.foundLocation,
+      foundMonth: seed.foundMonth,
+      pickupLocation: PICKUP_LOCATIONS[index % PICKUP_LOCATIONS.length] ?? PICKUP_LOCATIONS[0],
+      startPrice: seed.startPrice,
+      currentPrice: seed.currentPrice,
+      bidCount: seed.bidCount,
+      status: seed.status,
+      endTime: at(seed.endOffsetMs),
+    };
+    if (seed.status !== 'sold') return base;
+    return {
+      ...base,
+      winnerSub: demoUserSub,
+      winnerNickname: DEMO_USER.nickname,
+      soldAt: at(seed.endOffsetMs),
+      pickupStatus: seed.pickupStatus ?? 'awaiting',
+      pickupDate: seed.pickupDate,
+      pickupCode: seed.pickupCode,
+      pickupDeadline: at(seed.endOffsetMs + 14 * DAYS),
+    };
+  });
 
-const buildBids = (): Bid[] => {
+const buildBids = (demoUserSub: string): Bid[] => {
   const bids: Bid[] = [];
   for (const seed of SEEDS) {
     if (seed.bidCount === 0) continue;
@@ -255,17 +375,22 @@ const buildBids = (): Bid[] => {
     for (let i = 0; i < seed.bidCount; i += 1) {
       const progress = (i + 1) / seed.bidCount;
       const amount = Math.round(seed.startPrice + span * progress);
-      // 入札時刻: 過去2日間に分散（sold は終了前に収める）
       const baseOffset =
         seed.status === 'sold' ? seed.endOffsetMs - 2 * DAYS : -2 * DAYS;
       const createdAt = new Date(
         now + baseOffset + (2 * DAYS * (i + 1)) / (seed.bidCount + 1),
       ).toISOString();
-      const bidderName = BIDDER_NAMES[(i + seed.itemId.length) % BIDDER_NAMES.length] ?? '匿名';
+      // 落札済み品の最高額入札はデモ一般ユーザーのものにする（マイページのデモ用）
+      const isWinningBid = seed.status === 'sold' && i === seed.bidCount - 1;
+      const bidderName = isWinningBid
+        ? DEMO_USER.nickname
+        : BIDDER_NAMES[(i + seed.itemId.length) % BIDDER_NAMES.length] ?? '匿名';
+      const bidderSub = isWinningBid ? demoUserSub : `seed-${bidderName}`;
       bids.push({
         itemId: seed.itemId,
         bidId: `${createdAt}#seed${i}`,
         bidderName,
+        bidderSub,
         amount,
         createdAt,
       });
@@ -273,6 +398,8 @@ const buildBids = (): Bid[] => {
   }
   return bids;
 };
+
+// ---------- DynamoDB書き込み ----------
 
 const chunk = <T>(arr: readonly T[], size: number): T[][] => {
   const result: T[][] = [];
@@ -282,7 +409,10 @@ const chunk = <T>(arr: readonly T[], size: number): T[][] => {
   return result;
 };
 
-const batchWrite = async (tableName: string, records: readonly Record<string, unknown>[]): Promise<void> => {
+const batchWrite = async (
+  tableName: string,
+  records: readonly Record<string, unknown>[],
+): Promise<void> => {
   for (const group of chunk(records, 25)) {
     await doc.send(
       new BatchWriteCommand({
@@ -323,11 +453,17 @@ const purgeTable = async (tableName: string, keyNames: readonly string[]): Promi
 };
 
 const main = async (): Promise<void> => {
+  const userPoolId = await getUserPoolId();
+  const demoUserSub = await ensureUser(userPoolId, DEMO_USER);
+  const adminUserSub = await ensureUser(userPoolId, ADMIN_USER, 'admin');
+  console.log(`Users ready: demo=${demoUserSub} admin=${adminUserSub}`);
+
   const purgedBids = await purgeTable(BIDS_TABLE, ['itemId', 'bidId']);
   const purgedItems = await purgeTable(ITEMS_TABLE, ['itemId']);
   console.log(`Purged ${purgedItems} items and ${purgedBids} bids.`);
-  const items = buildItems();
-  const bids = buildBids();
+
+  const items = buildItems(demoUserSub);
+  const bids = buildBids(demoUserSub);
   await batchWrite(ITEMS_TABLE, items);
   await batchWrite(BIDS_TABLE, bids);
   console.log(`Seeded ${items.length} items and ${bids.length} bids.`);

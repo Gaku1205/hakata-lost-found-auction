@@ -1,46 +1,49 @@
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { ApiError, fetchItemDetail, postBid } from '../api';
+import { useAuth } from '../auth/AuthContext';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { formatFoundMonth, relativeTime, timeLeft, yen } from '../format';
 import { useLoadable, useNow } from '../hooks';
 import type { Bid, LostItem } from '../types';
 import { CATEGORY_LABELS } from '../types';
 
-const NICKNAME_KEY = 'megurimono-nickname';
-
-const loadNickname = (): string => {
-  try {
-    return window.localStorage.getItem(NICKNAME_KEY) ?? '';
-  } catch {
-    return '';
-  }
-};
-
-const saveNickname = (name: string): void => {
-  try {
-    window.localStorage.setItem(NICKNAME_KEY, name);
-  } catch {
-    // localStorage が使えない環境では保存をあきらめる
-  }
-};
-
 type BidFormProps = {
   item: LostItem;
+  currentPrice: number;
   onBidPlaced: (bid: Bid, currentPrice: number) => void;
 };
 
-const BidForm = ({ item, onBidPlaced }: BidFormProps): JSX.Element => {
-  const [bidderName, setBidderName] = useState(loadNickname);
+const BidForm = ({ item, currentPrice, onBidPlaced }: BidFormProps): JSX.Element => {
+  const { state } = useAuth();
+  const location = useLocation();
   const [amountText, setAmountText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const suggested = item.currentPrice + 100;
+  if (state.status !== 'authed') {
+    return (
+      <div className="bid-login-cta">
+        <h2 className="panel__heading">入札する</h2>
+        <p className="bid-login-cta__text">
+          入札にはログインが必要です。なりすまし防止のため、入札者名はアカウントのニックネームが使われます。
+        </p>
+        <Link
+          className="btn btn--primary"
+          to="/login"
+          state={{ returnTo: `${location.pathname}${location.search}` }}
+        >
+          ログインして入札する
+        </Link>
+      </div>
+    );
+  }
+
+  const suggested = currentPrice + 100;
 
   const applyDelta = (delta: number): void => {
-    setAmountText(String(item.currentPrice + delta));
+    setAmountText(String(currentPrice + delta));
     setError(null);
   };
 
@@ -49,24 +52,18 @@ const BidForm = ({ item, onBidPlaced }: BidFormProps): JSX.Element => {
     setError(null);
     setSuccess(null);
 
-    const name = bidderName.trim();
-    if (name.length < 1 || name.length > 20) {
-      setError('ニックネームは1〜20文字で入力してください');
-      return;
-    }
     const amount = Number.parseInt(amountText, 10);
     if (Number.isNaN(amount) || String(amount) !== amountText.trim()) {
       setError('入札金額は整数で入力してください');
       return;
     }
-    if (amount <= item.currentPrice) {
-      setError(`現在価格（${yen(item.currentPrice)}）より高い金額を入力してください`);
+    if (amount <= currentPrice) {
+      setError(`現在価格（${yen(currentPrice)}）より高い金額を入力してください`);
       return;
     }
 
     setSubmitting(true);
-    saveNickname(name);
-    postBid(item.itemId, { bidderName: name, amount })
+    postBid(item.itemId, amount)
       .then((result) => {
         setSuccess('入札を受け付けました。現在価格が更新されました。');
         setAmountText('');
@@ -83,21 +80,9 @@ const BidForm = ({ item, onBidPlaced }: BidFormProps): JSX.Element => {
   return (
     <form className="bid-form" onSubmit={handleSubmit} noValidate>
       <h2 className="panel__heading">入札する</h2>
-      <div className="field">
-        <label htmlFor="bidder-name">
-          ニックネーム <span className="req">必須</span>
-        </label>
-        <input
-          id="bidder-name"
-          type="text"
-          value={bidderName}
-          maxLength={20}
-          autoComplete="nickname"
-          onChange={(e) => setBidderName(e.target.value)}
-          required
-        />
-        <p className="field__help">実名は不要です（デモのため認証はありません）</p>
-      </div>
+      <p className="bid-as">
+        <span className="bid-as__name">{state.user.nickname}</span> さんとして入札します
+      </p>
       <div className="field">
         <label htmlFor="bid-amount">
           入札金額（円） <span className="req">必須</span>
@@ -106,7 +91,7 @@ const BidForm = ({ item, onBidPlaced }: BidFormProps): JSX.Element => {
           id="bid-amount"
           type="number"
           inputMode="numeric"
-          min={item.currentPrice + 1}
+          min={currentPrice + 1}
           step={1}
           placeholder={`${suggested} 以上を推奨`}
           value={amountText}
@@ -142,6 +127,7 @@ const BidForm = ({ item, onBidPlaced }: BidFormProps): JSX.Element => {
 
 export const ItemDetail = (): JSX.Element => {
   const { itemId } = useParams<{ itemId: string }>();
+  const { state: authState } = useAuth();
   const [result, reload] = useLoadable(
     () => fetchItemDetail(itemId ?? ''),
     [itemId],
@@ -183,6 +169,10 @@ export const ItemDetail = (): JSX.Element => {
   const bids: readonly Bid[] = [...localBids, ...result.data.bids];
   const remaining = timeLeft(item.endTime, nowMs);
   const isClosed = item.status === 'sold' || remaining.ended;
+  const isWinner =
+    authState.status === 'authed' &&
+    item.status === 'sold' &&
+    item.winnerSub === authState.user.sub;
 
   const handleBidPlaced = (bid: Bid, price: number): void => {
     setLocalBids((prev) => [bid, ...prev]);
@@ -219,6 +209,15 @@ export const ItemDetail = (): JSX.Element => {
             <div className="meta__row">
               <dt>拾得時期</dt>
               <dd>{formatFoundMonth(item.foundMonth)}</dd>
+            </div>
+            <div className="meta__row">
+              <dt>受取拠点</dt>
+              <dd>
+                {item.pickupLocation ?? '後日ご案内します'}
+                <span className="meta__note">
+                  郵送は行わず、落札後にまちの受取拠点でお渡しします
+                </span>
+              </dd>
             </div>
             <div className="meta__row">
               <dt>開始価格</dt>
@@ -266,11 +265,22 @@ export const ItemDetail = (): JSX.Element => {
               </span>
             </p>
             {isClosed ? (
-              <p className="closed-note">
-                売上は自治体の歳入・地域振興事業に充てられます。ご参加ありがとうございました。
-              </p>
+              isWinner ? (
+                <div className="winner-cta">
+                  <p className="closed-note">
+                    おめでとうございます！あなたが落札しました。受取拠点でのお受け取り手続きへお進みください。
+                  </p>
+                  <Link className="btn btn--primary" to="/mypage">
+                    受取手続きへ（マイページ）
+                  </Link>
+                </div>
+              ) : (
+                <p className="closed-note">
+                  売上は自治体の歳入・地域振興事業に充てられます。ご参加ありがとうございました。
+                </p>
+              )
             ) : (
-              <BidForm item={item} onBidPlaced={handleBidPlaced} />
+              <BidForm item={item} currentPrice={currentPrice} onBidPlaced={handleBidPlaced} />
             )}
           </div>
         </aside>

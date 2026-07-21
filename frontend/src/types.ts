@@ -52,6 +52,35 @@ export type Stats = {
   activeBidTotal: number;
 };
 
+export type BidderSummary = {
+  bidderSub: string;
+  bidderName: string;
+  bidCount: number;
+  itemCount: number;
+  ips: string[];
+  lastBidAt: string;
+  flags: {
+    sharedIp: boolean;
+    rapidBids: boolean;
+  };
+};
+
+export type MonitorBid = {
+  bidId: string;
+  itemId: string;
+  itemTitle: string;
+  bidderName: string;
+  bidderSub: string;
+  amount: number;
+  createdAt: string;
+  sourceIp: string;
+};
+
+export type BidMonitor = {
+  bidders: BidderSummary[];
+  recentBids: MonitorBid[];
+};
+
 export type SortKey = 'end_asc' | 'price_asc' | 'price_desc' | 'bids_desc';
 
 export const SORT_OPTIONS: readonly { value: SortKey; label: string }[] = [

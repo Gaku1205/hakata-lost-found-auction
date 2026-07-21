@@ -11,6 +11,7 @@ import { yen } from '../../format';
 import { useLoadable } from '../../hooks';
 import type { LostItem } from '../../types';
 import { CATEGORY_LABELS, PICKUP_STATUS_LABELS } from '../../types';
+import { AdminTabs } from './AdminTabs';
 
 const endTimeLabel = (iso: string): string => {
   const date = new Date(iso);
@@ -59,19 +60,19 @@ const AdminRow = ({ item, onChanged, onError }: RowProps): JSX.Element => {
 
   return (
     <tr>
-      <td>
+      <td data-label="品名">
         <Link to={`/items/${item.itemId}`}>{item.title}</Link>
         <span className="table-sub">{CATEGORY_LABELS[item.category]}</span>
       </td>
-      <td>
+      <td data-label="状態">
         <span className={`status-chip status-chip--${item.status}`}>
           {item.status === 'active' ? '販売中' : '落札済み'}
         </span>
       </td>
-      <td className="table-num">{yen(item.currentPrice)}</td>
-      <td className="table-num">{item.bidCount}件</td>
-      <td>{endTimeLabel(item.endTime)}</td>
-      <td>
+      <td data-label="現在価格" className="table-num">{yen(item.currentPrice)}</td>
+      <td data-label="入札" className="table-num">{item.bidCount}件</td>
+      <td data-label="終了日時">{endTimeLabel(item.endTime)}</td>
+      <td data-label="受け渡し">
         {item.status === 'sold' ? (
           <>
             <span className="table-sub">
@@ -105,7 +106,7 @@ const AdminRow = ({ item, onChanged, onError }: RowProps): JSX.Element => {
           <span className="table-sub">—</span>
         )}
       </td>
-      <td>
+      <td data-label="操作">
         <div className="table-actions">
           {item.status === 'active' ? (
             <>
@@ -157,6 +158,7 @@ export const AdminItems = (): JSX.Element => {
           ＋ 新規出品
         </Link>
       </div>
+      <AdminTabs />
 
       {actionError !== null ? (
         <div className="notice notice--error" role="alert">

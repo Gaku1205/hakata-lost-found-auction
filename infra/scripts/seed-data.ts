@@ -61,6 +61,17 @@ const BIDDER_NAMES = [
   '祇園の風',
 ] as const;
 
+// 入札監視デモ用のIP割り当て（TEST-NET帯）。
+// 「つばめ号」と「祇園の風」は同一IPを共有 = サクラアカウント検知のデモ。
+const DEMO_USER_IP = '198.51.100.7';
+const SHARED_IP = '203.0.113.50';
+
+const ipForBidder = (name: string): string => {
+  if (name === 'つばめ号' || name === '祇園の風') return SHARED_IP;
+  const index = BIDDER_NAMES.findIndex((n) => n === name);
+  return `203.0.113.${10 + (index < 0 ? 0 : index)}`;
+};
+
 // ---------- Cognito ----------
 
 const getUserPoolId = async (): Promise<string> => {
@@ -273,7 +284,7 @@ const SEEDS: readonly SeedDef[] = [
     foundMonth: '2026-02',
     startPrice: 1000,
     currentPrice: 1800,
-    bidCount: 7,
+    bidCount: 11,
     status: 'active',
     endOffsetMs: 10 * HOURS,
   },
@@ -338,7 +349,10 @@ const SEEDS: readonly SeedDef[] = [
   },
 ];
 
-const buildItems = (demoUserSub: string): LostItem[] =>
+const buildItems = (
+  demoUserSub: string,
+  topBidderByItem: ReadonlyMap<string, string>,
+): LostItem[] =>
   SEEDS.map((seed, index) => {
     const base: LostItem = {
       itemId: seed.itemId,
@@ -353,6 +367,7 @@ const buildItems = (demoUserSub: string): LostItem[] =>
       bidCount: seed.bidCount,
       status: seed.status,
       endTime: at(seed.endOffsetMs),
+      topBidderSub: topBidderByItem.get(seed.itemId),
     };
     if (seed.status !== 'sold') return base;
     return {
@@ -372,19 +387,28 @@ const buildBids = (demoUserSub: string): Bid[] => {
   for (const seed of SEEDS) {
     if (seed.bidCount === 0) continue;
     const span = seed.currentPrice - seed.startPrice;
+    // i-010 は入札監視デモ用: 直近10分弱に入札が密集（連続入札フラグの実演）
+    const isRapidDemo = seed.itemId === 'i-010';
     for (let i = 0; i < seed.bidCount; i += 1) {
       const progress = (i + 1) / seed.bidCount;
       const amount = Math.round(seed.startPrice + span * progress);
       const baseOffset =
         seed.status === 'sold' ? seed.endOffsetMs - 2 * DAYS : -2 * DAYS;
-      const createdAt = new Date(
-        now + baseOffset + (2 * DAYS * (i + 1)) / (seed.bidCount + 1),
-      ).toISOString();
+      // 連続入札デモ: 直近11分弱に55秒間隔で密集させる（交互2人が各自10分内に5件以上）
+      const createdAt = isRapidDemo
+        ? new Date(now - 11 * 60 * 1000 + i * 55 * 1000).toISOString()
+        : new Date(
+            now + baseOffset + (2 * DAYS * (i + 1)) / (seed.bidCount + 1),
+          ).toISOString();
       // 落札済み品の最高額入札はデモ一般ユーザーのものにする（マイページのデモ用）
       const isWinningBid = seed.status === 'sold' && i === seed.bidCount - 1;
+      // 連続入札デモは「つばめ号」「祇園の風」（同一IP組）が交互に吊り上げた体にする
+      const rapidName = i % 2 === 0 ? 'つばめ号' : '祇園の風';
       const bidderName = isWinningBid
         ? DEMO_USER.nickname
-        : BIDDER_NAMES[(i + seed.itemId.length) % BIDDER_NAMES.length] ?? '匿名';
+        : isRapidDemo
+          ? rapidName
+          : BIDDER_NAMES[(i + seed.itemId.length) % BIDDER_NAMES.length] ?? '匿名';
       const bidderSub = isWinningBid ? demoUserSub : `seed-${bidderName}`;
       bids.push({
         itemId: seed.itemId,
@@ -393,10 +417,23 @@ const buildBids = (demoUserSub: string): Bid[] => {
         bidderSub,
         amount,
         createdAt,
+        sourceIp: isWinningBid ? DEMO_USER_IP : ipForBidder(bidderName),
       });
     }
   }
   return bids;
+};
+
+const topBidderMapOf = (bids: readonly Bid[]): Map<string, string> => {
+  const map = new Map<string, string>();
+  const best = new Map<string, number>();
+  for (const bid of bids) {
+    if (bid.amount >= (best.get(bid.itemId) ?? 0)) {
+      best.set(bid.itemId, bid.amount);
+      map.set(bid.itemId, bid.bidderSub);
+    }
+  }
+  return map;
 };
 
 // ---------- DynamoDB書き込み ----------
@@ -462,8 +499,8 @@ const main = async (): Promise<void> => {
   const purgedItems = await purgeTable(ITEMS_TABLE, ['itemId']);
   console.log(`Purged ${purgedItems} items and ${purgedBids} bids.`);
 
-  const items = buildItems(demoUserSub);
   const bids = buildBids(demoUserSub);
+  const items = buildItems(demoUserSub, topBidderMapOf(bids));
   await batchWrite(ITEMS_TABLE, items);
   await batchWrite(BIDS_TABLE, bids);
   console.log(`Seeded ${items.length} items and ${bids.length} bids.`);

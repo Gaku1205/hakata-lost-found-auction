@@ -16,6 +16,7 @@ import {
   isSortKey,
   type AdminItemInput,
   type Bid,
+  type BidderSummary,
   type LostItem,
   type SortKey,
   type Stats,
@@ -28,6 +29,13 @@ const USER_POOL_CLIENT_ID = process.env.USER_POOL_CLIENT_ID ?? '';
 const REGION = process.env.AWS_REGION ?? 'ap-northeast-1';
 
 const PICKUP_DEADLINE_DAYS = 14;
+
+// 吊り上げ・不正入札対策のパラメータ
+const EXTENSION_WINDOW_MS = 5 * 60 * 1000; // 残りこの時間未満の入札で自動延長
+const MAX_BID_MULTIPLIER = 3; // 現在価格の何倍まで入札可能か
+const MAX_BID_INCREMENT = 50_000; // 1回の入札で上乗せできる最大額
+const RAPID_BID_COUNT = 5; // この件数が
+const RAPID_BID_WINDOW_MS = 10 * 60 * 1000; // この時間内にあれば連続入札フラグ
 
 const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
   marshallOptions: { removeUndefinedValues: true },
@@ -199,18 +207,64 @@ const getStats = async (): Promise<APIGatewayProxyResult> => {
 
 // ---------- 認証つきAPI（一般ユーザー） ----------
 
+const extractSourceIp = (event: APIGatewayProxyEvent): string => {
+  const forwarded =
+    event.headers['X-Forwarded-For'] ?? event.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded !== '') {
+    const first = forwarded.split(',')[0];
+    if (first !== undefined) return first.trim();
+  }
+  return event.requestContext.identity.sourceIp ?? '';
+};
+
 const placeBid = async (
   itemId: string,
-  body: string | null,
+  event: APIGatewayProxyEvent,
   user: AuthUser,
 ): Promise<APIGatewayProxyResult> => {
-  const data = parseBody(body);
+  const data = parseBody(event.body);
   const amount = data?.['amount'];
   if (typeof amount !== 'number' || !Number.isInteger(amount) || amount < 1 || amount > 1_000_000) {
     return json(400, { message: '入札金額は1〜1,000,000円の整数で入力してください' });
   }
 
-  const now = new Date().toISOString();
+  // 事前チェック（自動延長の計算・分かりやすいエラーのため）。
+  // 競合時の整合性はトランザクションの条件式が最終防衛線になる。
+  const preResult = await doc.send(
+    new GetCommand({ TableName: ITEMS_TABLE, Key: { itemId } }),
+  );
+  const preItem: unknown = preResult.Item;
+  if (!isLostItem(preItem)) return json(404, { message: '出品が見つかりません' });
+
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+
+  if (preItem.status !== 'active' || preItem.endTime <= now) {
+    return json(409, { message: 'このオークションは終了しています' });
+  }
+  if (preItem.topBidderSub === user.sub) {
+    return json(409, {
+      message: 'あなたが現在の最高額入札者です。他の入札があるまでお待ちください（吊り上げ防止）',
+    });
+  }
+  const maxAllowed = Math.min(
+    preItem.currentPrice * MAX_BID_MULTIPLIER,
+    preItem.currentPrice + MAX_BID_INCREMENT,
+  );
+  if (amount > maxAllowed) {
+    return json(400, {
+      message: `1回の入札は${maxAllowed.toLocaleString('ja-JP')}円まで（現在価格の${MAX_BID_MULTIPLIER}倍・+${MAX_BID_INCREMENT.toLocaleString('ja-JP')}円以内）です。価格の吊り上げ・誤入力防止のためご協力ください`,
+      maxAllowed,
+    });
+  }
+
+  // アンチスナイプ: 終了間際の入札は終了時刻を延長する
+  const endMs = new Date(preItem.endTime).getTime();
+  const extended = endMs - nowMs < EXTENSION_WINDOW_MS;
+  const newEndTime = extended
+    ? new Date(nowMs + EXTENSION_WINDOW_MS).toISOString()
+    : preItem.endTime;
+
   const bid: Bid = {
     itemId,
     bidId: `${now}#${Math.random().toString(36).slice(2, 8)}`,
@@ -218,6 +272,7 @@ const placeBid = async (
     bidderSub: user.sub,
     amount,
     createdAt: now,
+    sourceIp: extractSourceIp(event),
   };
 
   try {
@@ -228,15 +283,18 @@ const placeBid = async (
             Update: {
               TableName: ITEMS_TABLE,
               Key: { itemId },
-              UpdateExpression: 'SET currentPrice = :amount, bidCount = bidCount + :one',
+              UpdateExpression:
+                'SET currentPrice = :amount, bidCount = bidCount + :one, topBidderSub = :sub, endTime = :newEnd',
               ConditionExpression:
-                '#st = :active AND endTime > :now AND currentPrice < :amount',
+                '#st = :active AND endTime > :now AND currentPrice < :amount AND (attribute_not_exists(topBidderSub) OR topBidderSub <> :sub)',
               ExpressionAttributeNames: { '#st': 'status' },
               ExpressionAttributeValues: {
                 ':amount': amount,
                 ':one': 1,
                 ':active': 'active',
                 ':now': now,
+                ':sub': user.sub,
+                ':newEnd': newEndTime,
               },
             },
           },
@@ -256,6 +314,11 @@ const placeBid = async (
       if (item.status !== 'active' || item.endTime <= now) {
         return json(409, { message: 'このオークションは終了しています' });
       }
+      if (item.topBidderSub === user.sub) {
+        return json(409, {
+          message: 'あなたが現在の最高額入札者です。他の入札があるまでお待ちください（吊り上げ防止）',
+        });
+      }
       return json(409, {
         message: `入札額は現在価格（${item.currentPrice.toLocaleString('ja-JP')}円）より高い金額を指定してください`,
         currentPrice: item.currentPrice,
@@ -264,7 +327,7 @@ const placeBid = async (
     throw error;
   }
 
-  return json(201, { currentPrice: amount, bid });
+  return json(201, { currentPrice: amount, bid, extended, endTime: newEndTime });
 };
 
 const getMyWins = async (user: AuthUser): Promise<APIGatewayProxyResult> => {
@@ -505,6 +568,97 @@ const adminCompletePickup = async (
   return json(200, { pickupStatus: 'completed' });
 };
 
+const isBidRecord = (value: unknown): value is Bid =>
+  isRecord(value) &&
+  typeof value['itemId'] === 'string' &&
+  typeof value['bidId'] === 'string' &&
+  typeof value['bidderName'] === 'string' &&
+  typeof value['bidderSub'] === 'string' &&
+  typeof value['amount'] === 'number' &&
+  typeof value['createdAt'] === 'string';
+
+const adminBidMonitor = async (): Promise<APIGatewayProxyResult> => {
+  // デモ規模のため全件Scan（実運用ではGSI/ストリーム集計に置き換える想定）
+  const bids: Bid[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const result = await doc.send(
+      new ScanCommand({ TableName: BIDS_TABLE, ExclusiveStartKey: lastKey }),
+    );
+    bids.push(...(result.Items ?? []).filter(isBidRecord));
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey !== undefined);
+
+  const items = await scanAllItems();
+  const titleById = new Map(items.map((item) => [item.itemId, item.title]));
+
+  // IP → 利用アカウント集合（サクラアカウント検知用）
+  const subsByIp = new Map<string, Set<string>>();
+  for (const bid of bids) {
+    const ip = bid.sourceIp ?? '';
+    if (ip === '') continue;
+    const set = subsByIp.get(ip) ?? new Set<string>();
+    set.add(bid.bidderSub);
+    subsByIp.set(ip, set);
+  }
+
+  const byBidder = new Map<string, Bid[]>();
+  for (const bid of bids) {
+    const list = byBidder.get(bid.bidderSub) ?? [];
+    list.push(bid);
+    byBidder.set(bid.bidderSub, list);
+  }
+
+  const bidders: BidderSummary[] = [...byBidder.entries()].map(([sub, list]) => {
+    const sorted = [...list].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const timestamps = sorted.map((b) => new Date(b.createdAt).getTime());
+    let rapidBids = false;
+    for (let i = 0; i + RAPID_BID_COUNT - 1 < timestamps.length; i += 1) {
+      const first = timestamps[i];
+      const last = timestamps[i + RAPID_BID_COUNT - 1];
+      if (first !== undefined && last !== undefined && last - first <= RAPID_BID_WINDOW_MS) {
+        rapidBids = true;
+        break;
+      }
+    }
+    const ips = [...new Set(list.map((b) => b.sourceIp ?? '').filter((ip) => ip !== ''))];
+    const sharedIp = ips.some((ip) => (subsByIp.get(ip)?.size ?? 0) >= 2);
+    const lastBid = sorted[sorted.length - 1];
+    return {
+      bidderSub: sub,
+      bidderName: lastBid?.bidderName ?? '不明',
+      bidCount: list.length,
+      itemCount: new Set(list.map((b) => b.itemId)).size,
+      ips,
+      lastBidAt: lastBid?.createdAt ?? '',
+      flags: { sharedIp, rapidBids },
+    };
+  });
+
+  bidders.sort((a, b) => {
+    const flagsA = (a.flags.sharedIp ? 1 : 0) + (a.flags.rapidBids ? 1 : 0);
+    const flagsB = (b.flags.sharedIp ? 1 : 0) + (b.flags.rapidBids ? 1 : 0);
+    if (flagsA !== flagsB) return flagsB - flagsA;
+    return b.bidCount - a.bidCount;
+  });
+
+  const recentBids = [...bids]
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 20)
+    .map((bid) => ({
+      bidId: bid.bidId,
+      itemId: bid.itemId,
+      itemTitle: titleById.get(bid.itemId) ?? bid.itemId,
+      bidderName: bid.bidderName,
+      bidderSub: bid.bidderSub,
+      amount: bid.amount,
+      createdAt: bid.createdAt,
+      sourceIp: bid.sourceIp ?? '',
+    }));
+
+  return json(200, { bidders, recentBids });
+};
+
 const adminDeleteItem = async (itemId: string): Promise<APIGatewayProxyResult> => {
   const bidKeys: { itemId: string; bidId: string }[] = [];
   let lastKey: Record<string, unknown> | undefined;
@@ -587,7 +741,7 @@ export const handler = async (
       if (user === null) return json(401, { message: '入札にはログインが必要です' });
       const itemId = segments[2];
       if (itemId === undefined) return json(404, { message: 'Not Found' });
-      return await placeBid(decodeURIComponent(itemId), event.body, user);
+      return await placeBid(decodeURIComponent(itemId), event, user);
     }
 
     if (
@@ -617,6 +771,9 @@ export const handler = async (
       if (user === null) return json(401, { message: 'ログインが必要です' });
       if (!user.isAdmin) return json(403, { message: '管理者権限がありません' });
 
+      if (segments[2] === 'bid-monitor' && segments.length === 3 && method === 'GET') {
+        return await adminBidMonitor();
+      }
       if (segments[2] === 'items' && segments.length === 3 && method === 'POST') {
         return await adminCreateItem(event.body);
       }

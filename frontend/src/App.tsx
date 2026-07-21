@@ -1,9 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
 import { RequireAdmin, RequireAuth } from './components/RequireAdmin';
 import { AdminItemForm } from './pages/admin/AdminItemForm';
 import { AdminItems } from './pages/admin/AdminItems';
+import { BidMonitor } from './pages/admin/BidMonitor';
 import { Dashboard } from './pages/Dashboard';
 import { Home } from './pages/Home';
 import { ItemDetail } from './pages/ItemDetail';
@@ -68,8 +69,15 @@ const UserMenu = (): JSX.Element => {
 
 const Header = (): JSX.Element => {
   const { state } = useAuth();
+  const { pathname } = useLocation();
+  const [menuOpen, setMenuOpen] = useState(false);
   const isAuthed = state.status === 'authed';
   const isAdmin = isAuthed && state.user.isAdmin;
+
+  // ページ遷移でドロワーを閉じる
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname]);
 
   return (
     <header className="site-header">
@@ -80,26 +88,55 @@ const Header = (): JSX.Element => {
           </span>
           <span className="brand__name">めぐりモノ</span>
         </Link>
-        <nav className="site-nav" aria-label="メインナビゲーション">
-          <NavLink to="/" end className="site-nav__link">
-            出品一覧
-          </NavLink>
-          <NavLink to="/dashboard" className="site-nav__link">
-            収益ダッシュボード
-          </NavLink>
-          {isAuthed ? (
-            <NavLink to="/mypage" className="site-nav__link">
-              マイページ
+
+        <button
+          type="button"
+          className="nav-toggle"
+          aria-expanded={menuOpen}
+          aria-controls="site-menu"
+          aria-label={menuOpen ? 'メニューを閉じる' : 'メニューを開く'}
+          onClick={() => setMenuOpen((open) => !open)}
+        >
+          <svg
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            aria-hidden="true"
+          >
+            {menuOpen ? (
+              <path d="M6 6l12 12M18 6L6 18" />
+            ) : (
+              <path d="M4 7h16M4 12h16M4 17h16" />
+            )}
+          </svg>
+        </button>
+
+        <div id="site-menu" className={`site-menu${menuOpen ? ' site-menu--open' : ''}`}>
+          <nav className="site-nav" aria-label="メインナビゲーション">
+            <NavLink to="/" end className="site-nav__link">
+              出品一覧
             </NavLink>
-          ) : null}
-          {isAdmin ? (
-            <NavLink to="/admin" className="site-nav__link site-nav__link--admin">
-              管理画面
+            <NavLink to="/dashboard" className="site-nav__link">
+              収益ダッシュボード
             </NavLink>
-          ) : null}
-        </nav>
-        <UserMenu />
-        <span className="demo-badge">デモ環境・模擬データ</span>
+            {isAuthed ? (
+              <NavLink to="/mypage" className="site-nav__link">
+                マイページ
+              </NavLink>
+            ) : null}
+            {isAdmin ? (
+              <NavLink to="/admin" className="site-nav__link site-nav__link--admin">
+                管理画面
+              </NavLink>
+            ) : null}
+          </nav>
+          <UserMenu />
+          <span className="demo-badge">デモ環境・模擬データ</span>
+        </div>
       </div>
     </header>
   );
@@ -133,6 +170,14 @@ export const App = (): JSX.Element => (
           element={
             <RequireAdmin>
               <AdminItems />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="/admin/monitor"
+          element={
+            <RequireAdmin>
+              <BidMonitor />
             </RequireAdmin>
           }
         />

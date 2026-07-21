@@ -11,7 +11,7 @@ import { CATEGORY_LABELS } from '../types';
 type BidFormProps = {
   item: LostItem;
   currentPrice: number;
-  onBidPlaced: (bid: Bid, currentPrice: number) => void;
+  onBidPlaced: (bid: Bid, currentPrice: number, endTime?: string) => void;
 };
 
 const BidForm = ({ item, currentPrice, onBidPlaced }: BidFormProps): JSX.Element => {
@@ -65,9 +65,13 @@ const BidForm = ({ item, currentPrice, onBidPlaced }: BidFormProps): JSX.Element
     setSubmitting(true);
     postBid(item.itemId, amount)
       .then((result) => {
-        setSuccess('入札を受け付けました。現在価格が更新されました。');
+        setSuccess(
+          result.extended === true
+            ? '入札を受け付けました。終了間際のため、終了時刻が5分延長されました。'
+            : '入札を受け付けました。現在価格が更新されました。',
+        );
         setAmountText('');
-        onBidPlaced(result.bid, result.currentPrice);
+        onBidPlaced(result.bid, result.currentPrice, result.endTime);
       })
       .catch((err: unknown) => {
         const message =
@@ -136,6 +140,7 @@ export const ItemDetail = (): JSX.Element => {
   const [localBids, setLocalBids] = useState<readonly Bid[]>([]);
   const [localPrice, setLocalPrice] = useState<number | null>(null);
   const [localBidCount, setLocalBidCount] = useState(0);
+  const [localEndTime, setLocalEndTime] = useState<string | null>(null);
 
   if (result.state === 'loading') {
     return (
@@ -167,17 +172,22 @@ export const ItemDetail = (): JSX.Element => {
   const currentPrice = localPrice ?? item.currentPrice;
   const bidCount = item.bidCount + localBidCount;
   const bids: readonly Bid[] = [...localBids, ...result.data.bids];
-  const remaining = timeLeft(item.endTime, nowMs);
+  const remaining = timeLeft(localEndTime ?? item.endTime, nowMs);
   const isClosed = item.status === 'sold' || remaining.ended;
   const isWinner =
     authState.status === 'authed' &&
     item.status === 'sold' &&
     item.winnerSub === authState.user.sub;
 
-  const handleBidPlaced = (bid: Bid, price: number): void => {
+  const handleBidPlaced = (bid: Bid, price: number, endTime?: string): void => {
     setLocalBids((prev) => [bid, ...prev]);
     setLocalPrice(price);
     setLocalBidCount((n) => n + 1);
+    if (endTime !== undefined) setLocalEndTime(endTime);
+  };
+
+  const scrollToBidPanel = (): void => {
+    document.getElementById('bid-panel')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
   return (
@@ -229,6 +239,16 @@ export const ItemDetail = (): JSX.Element => {
             </div>
           </dl>
 
+          <aside className="fairness-note" aria-label="公正なオークションのための仕組み">
+            <h2 className="fairness-note__heading">公正なオークションのために</h2>
+            <ul className="fairness-note__list">
+              <li>終了間際（残り5分未満）の入札があると終了時刻が自動延長されます</li>
+              <li>現在最高額の入札者は連続して入札できません（吊り上げ防止）</li>
+              <li>1回の入札額には上限があります（現在価格の3倍・+5万円以内）</li>
+              <li>入札の撤回はできません</li>
+            </ul>
+          </aside>
+
           <section className="bid-history" aria-label="入札履歴">
             <h2 className="panel__heading">入札履歴（{bidCount}件）</h2>
             {bids.length === 0 ? (
@@ -250,7 +270,7 @@ export const ItemDetail = (): JSX.Element => {
         </div>
 
         <aside className="detail__side">
-          <div className="panel">
+          <div className="panel" id="bid-panel">
             <p className="price-block">
               <span className="price-block__label">
                 {isClosed ? '落札価格' : '現在価格'}
@@ -285,6 +305,18 @@ export const ItemDetail = (): JSX.Element => {
           </div>
         </aside>
       </div>
+
+      {!isClosed ? (
+        <div className="mobile-bid-bar" aria-hidden="false">
+          <div className="mobile-bid-bar__price">
+            <span className="mobile-bid-bar__label">現在価格</span>
+            <span className="mobile-bid-bar__value">{yen(currentPrice)}</span>
+          </div>
+          <button type="button" className="btn btn--primary btn--fit" onClick={scrollToBidPanel}>
+            入札する
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 };

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { fetchItems } from '../api';
+import { fetchItems, fetchStats } from '../api';
 import { ItemCard } from '../components/ItemCard';
+import { yen } from '../format';
 import { useLoadable, useNow } from '../hooks';
 import type { ItemCategory, SearchQuery } from '../types';
 import {
@@ -82,11 +83,13 @@ export const Home = (): JSX.Element => {
     () => fetchItems(query),
     [searchParams.toString()],
   );
+  const [statsResult] = useLoadable(fetchStats, []);
   const nowMs = useNow();
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   return (
     <>
-      <section className="hero">
+      <section className="hero hero--pattern">
         <div className="container">
           <h1 className="hero__title">
             落とし物に、
@@ -98,6 +101,22 @@ export const Home = (): JSX.Element => {
             地域のオークションで次の使い手へつなぎ、売上は自治体の歳入と地域振興に還元されます。
             落札品は郵送ではなく、まちの受取拠点でのお渡しです。
           </p>
+          {statsResult.state === 'ready' ? (
+            <dl className="hero__stats">
+              <div className="hero__stat">
+                <dt>出品中</dt>
+                <dd>{statsResult.data.activeCount}件</dd>
+              </div>
+              <div className="hero__stat">
+                <dt>地域への還元額</dt>
+                <dd>{yen(statsResult.data.soldTotal)}</dd>
+              </div>
+              <div className="hero__stat">
+                <dt>累計入札</dt>
+                <dd>{statsResult.data.totalBids}件</dd>
+              </div>
+            </dl>
+          ) : null}
         </div>
       </section>
 
@@ -115,69 +134,83 @@ export const Home = (): JSX.Element => {
               onChange={(e) => setQInput(e.target.value)}
             />
           </div>
-          <div className="search-bar__prices">
-            <label className="sr-only" htmlFor="search-min">
-              下限価格
-            </label>
-            <input
-              id="search-min"
-              type="number"
-              inputMode="numeric"
-              min={0}
-              placeholder="下限¥"
-              value={minInput}
-              onChange={(e) => setMinInput(e.target.value)}
-            />
-            <span aria-hidden="true">〜</span>
-            <label className="sr-only" htmlFor="search-max">
-              上限価格
-            </label>
-            <input
-              id="search-max"
-              type="number"
-              inputMode="numeric"
-              min={0}
-              placeholder="上限¥"
-              value={maxInput}
-              onChange={(e) => setMaxInput(e.target.value)}
-            />
-          </div>
-          <div className="search-bar__selects">
-            <label className="sr-only" htmlFor="search-status">
-              販売状況
-            </label>
-            <select
-              id="search-status"
-              value={query.status}
-              onChange={(e) => {
-                const value = e.target.value;
-                applyQuery({
-                  ...query,
-                  status: value === 'active' || value === 'sold' ? value : '',
-                });
-              }}
-            >
-              <option value="">すべての状況</option>
-              <option value="active">販売中のみ</option>
-              <option value="sold">落札済みのみ</option>
-            </select>
-            <label className="sr-only" htmlFor="search-sort">
-              並び替え
-            </label>
-            <select
-              id="search-sort"
-              value={query.sort}
-              onChange={(e) => {
-                const value = e.target.value;
-                applyQuery({ ...query, sort: isSortKey(value) ? value : 'end_asc' });
-              }}
-            >
-              {SORT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+          <button
+            type="button"
+            className="filter-toggle"
+            aria-expanded={filtersOpen}
+            aria-controls="search-advanced"
+            onClick={() => setFiltersOpen((open) => !open)}
+          >
+            絞り込み{filtersOpen ? 'を閉じる' : '・並び替え'}
+          </button>
+          <div
+            id="search-advanced"
+            className={`search-bar__advanced${filtersOpen ? ' search-bar__advanced--open' : ''}`}
+          >
+            <div className="search-bar__prices">
+              <label className="sr-only" htmlFor="search-min">
+                下限価格
+              </label>
+              <input
+                id="search-min"
+                type="number"
+                inputMode="numeric"
+                min={0}
+                placeholder="下限¥"
+                value={minInput}
+                onChange={(e) => setMinInput(e.target.value)}
+              />
+              <span aria-hidden="true">〜</span>
+              <label className="sr-only" htmlFor="search-max">
+                上限価格
+              </label>
+              <input
+                id="search-max"
+                type="number"
+                inputMode="numeric"
+                min={0}
+                placeholder="上限¥"
+                value={maxInput}
+                onChange={(e) => setMaxInput(e.target.value)}
+              />
+            </div>
+            <div className="search-bar__selects">
+              <label className="sr-only" htmlFor="search-status">
+                販売状況
+              </label>
+              <select
+                id="search-status"
+                value={query.status}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  applyQuery({
+                    ...query,
+                    status: value === 'active' || value === 'sold' ? value : '',
+                  });
+                }}
+              >
+                <option value="">すべての状況</option>
+                <option value="active">販売中のみ</option>
+                <option value="sold">落札済みのみ</option>
+              </select>
+              <label className="sr-only" htmlFor="search-sort">
+                並び替え
+              </label>
+              <select
+                id="search-sort"
+                value={query.sort}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  applyQuery({ ...query, sort: isSortKey(value) ? value : 'end_asc' });
+                }}
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 

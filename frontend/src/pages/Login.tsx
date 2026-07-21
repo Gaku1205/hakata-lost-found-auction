@@ -7,12 +7,12 @@ const DEMO_ACCOUNTS = [
   {
     label: '一般ユーザーでお試しログイン',
     email: 'demo@example.com',
-    password: 'REDACTED_PASSWORD',
+    password: 'REDACTED_DEMO_PASSWORD',
   },
   {
     label: '管理者でお試しログイン',
     email: 'admin@example.com',
-    password: 'REDACTED_PASSWORD',
+    password: 'REDACTED_ADMIN_PASSWORD',
   },
 ] as const;
 

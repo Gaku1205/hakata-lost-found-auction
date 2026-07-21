@@ -26,6 +26,7 @@ export type LostItem = {
   bidCount: number;
   status: ItemStatus;
   endTime: string;
+  topBidderSub?: string;
   // 落札後のみ設定されるフィールド
   winnerSub?: string;
   winnerNickname?: string;
@@ -43,6 +44,20 @@ export type Bid = {
   bidderSub: string;
   amount: number;
   createdAt: string;
+  sourceIp?: string;
+};
+
+export type BidderSummary = {
+  bidderSub: string;
+  bidderName: string;
+  bidCount: number;
+  itemCount: number;
+  ips: string[];
+  lastBidAt: string;
+  flags: {
+    sharedIp: boolean;
+    rapidBids: boolean;
+  };
 };
 
 export type Stats = {

@@ -2,7 +2,10 @@ import { getCurrentIdToken } from './auth/tokenStore';
 import type {
   AdminItemInput,
   Bid,
+  BidMonitor,
+  BidderSummary,
   LostItem,
+  MonitorBid,
   PickupStatus,
   SearchQuery,
   Stats,
@@ -63,7 +66,7 @@ const isAuthConfig = (value: unknown): value is AuthConfig =>
 
 type ItemsResponse = { items: LostItem[] };
 type ItemDetailResponse = { item: LostItem; bids: Bid[] };
-type BidResponse = { currentPrice: number; bid: Bid };
+type BidResponse = { currentPrice: number; bid: Bid; extended?: boolean; endTime?: string };
 type ItemResponse = { item: LostItem };
 type PickupReservationResponse = {
   pickupStatus: PickupStatus;
@@ -82,6 +85,37 @@ const isItemDetailResponse = (value: unknown): value is ItemDetailResponse =>
 
 const isBidResponse = (value: unknown): value is BidResponse =>
   isRecord(value) && typeof value.currentPrice === 'number' && isBid(value.bid);
+
+const isBidderSummary = (value: unknown): value is BidderSummary =>
+  isRecord(value) &&
+  typeof value.bidderSub === 'string' &&
+  typeof value.bidderName === 'string' &&
+  typeof value.bidCount === 'number' &&
+  typeof value.itemCount === 'number' &&
+  Array.isArray(value.ips) &&
+  value.ips.every((ip) => typeof ip === 'string') &&
+  typeof value.lastBidAt === 'string' &&
+  isRecord(value.flags) &&
+  typeof value.flags.sharedIp === 'boolean' &&
+  typeof value.flags.rapidBids === 'boolean';
+
+const isMonitorBid = (value: unknown): value is MonitorBid =>
+  isRecord(value) &&
+  typeof value.bidId === 'string' &&
+  typeof value.itemId === 'string' &&
+  typeof value.itemTitle === 'string' &&
+  typeof value.bidderName === 'string' &&
+  typeof value.bidderSub === 'string' &&
+  typeof value.amount === 'number' &&
+  typeof value.createdAt === 'string' &&
+  typeof value.sourceIp === 'string';
+
+const isBidMonitor = (value: unknown): value is BidMonitor =>
+  isRecord(value) &&
+  Array.isArray(value.bidders) &&
+  value.bidders.every(isBidderSummary) &&
+  Array.isArray(value.recentBids) &&
+  value.recentBids.every(isMonitorBid);
 
 const isItemResponse = (value: unknown): value is ItemResponse =>
   isRecord(value) && isLostItem(value.item);
@@ -211,3 +245,6 @@ export const adminDeleteItem = (itemId: string): Promise<unknown> =>
   request(`/api/admin/items/${encodeURIComponent(itemId)}`, isAnything, {
     method: 'DELETE',
   });
+
+export const adminFetchBidMonitor = (): Promise<BidMonitor> =>
+  request('/api/admin/bid-monitor', isBidMonitor);

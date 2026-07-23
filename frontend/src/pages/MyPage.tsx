@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import QRCode from 'qrcode';
-import { ApiError, fetchMyWins, postPickupReservation, postPickupSelfComplete } from '../api';
+import {
+  ApiError,
+  fetchMyWins,
+  postPayment,
+  postPickupReservation,
+  postPickupSelfComplete,
+} from '../api';
 import { useAuth } from '../auth/AuthContext';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { yen } from '../format';
@@ -38,7 +44,101 @@ type ReservationState = {
   pickupBoxNumber: number;
 };
 
+const PaymentPanel = ({
+  itemId,
+  amount,
+  onPaid,
+}: {
+  itemId: string;
+  amount: number;
+  onPaid: () => void;
+}): JSX.Element => {
+  const [cardNumber, setCardNumber] = useState('');
+  const [expiry, setExpiry] = useState('');
+  const [cvv, setCvv] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    setError(null);
+    if (cardNumber.trim() === '' || expiry.trim() === '' || cvv.trim() === '') {
+      setError('カード情報を入力してください（デモのため実在のカードは不要です）');
+      return;
+    }
+    setSubmitting(true);
+    postPayment(itemId)
+      .then(() => onPaid())
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : '支払い処理に失敗しました');
+      })
+      .finally(() => setSubmitting(false));
+  };
+
+  return (
+    <div className="payment-panel">
+      <p className="payment-panel__amount">
+        お支払い金額 <strong>{yen(amount)}</strong>
+      </p>
+      <p className="payment-panel__note">
+        ※デモ環境のため実際の決済は発生しません。カード情報も送信・保存されません。
+      </p>
+      <form className="payment-form" onSubmit={handleSubmit} noValidate>
+        <div className="field">
+          <label htmlFor={`card-number-${itemId}`}>カード番号</label>
+          <input
+            id={`card-number-${itemId}`}
+            type="text"
+            inputMode="numeric"
+            placeholder="4242 4242 4242 4242"
+            autoComplete="off"
+            value={cardNumber}
+            onChange={(e) => setCardNumber(e.target.value)}
+            required
+          />
+        </div>
+        <div className="payment-form__row">
+          <div className="field">
+            <label htmlFor={`card-expiry-${itemId}`}>有効期限</label>
+            <input
+              id={`card-expiry-${itemId}`}
+              type="text"
+              placeholder="MM/YY"
+              autoComplete="off"
+              value={expiry}
+              onChange={(e) => setExpiry(e.target.value)}
+              required
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={`card-cvv-${itemId}`}>セキュリティコード</label>
+            <input
+              id={`card-cvv-${itemId}`}
+              type="text"
+              inputMode="numeric"
+              placeholder="123"
+              autoComplete="off"
+              value={cvv}
+              onChange={(e) => setCvv(e.target.value)}
+              required
+            />
+          </div>
+        </div>
+        {error !== null ? (
+          <p className="field__error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <button type="submit" className="btn btn--primary" disabled={submitting}>
+          {submitting ? '処理中…' : `${yen(amount)} を支払う`}
+        </button>
+      </form>
+    </div>
+  );
+};
+
 const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
+  const [paid, setPaid] = useState(item.paymentStatus === 'paid');
   const [reservation, setReservation] = useState<ReservationState | null>(null);
   const [date, setDate] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -115,6 +215,12 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
 
         {status === 'completed' ? (
           <p className="pickup-done">受け渡し完了。ご利用ありがとうございました。</p>
+        ) : !paid ? (
+          <PaymentPanel
+            itemId={item.itemId}
+            amount={item.currentPrice}
+            onPaid={() => setPaid(true)}
+          />
         ) : status === 'reserved' && pickupCode !== undefined ? (
           <div className="pickup-panel">
             <p className="pickup-panel__label">受取予約日: {pickupDate}</p>
@@ -204,7 +310,7 @@ export const MyPage = (): JSX.Element => {
         result.data.items.length === 0 ? (
           <div className="notice">
             <p>まだ落札した品物はありません。</p>
-            <Link className="btn btn--ghost" to="/">
+            <Link className="btn btn--ghost" to="/items">
               出品一覧を見る
             </Link>
           </div>

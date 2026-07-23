@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test lambda/*.test.ts",
     "synth": "cdk synth",
     "deploy": "cdk deploy --require-approval never",
     "seed": "tsx scripts/seed-data.ts"

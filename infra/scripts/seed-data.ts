@@ -20,12 +20,15 @@ import type {
   ItemStatus,
   LostItem,
   Organization,
+  PartnerApplication,
+  PaymentStatus,
   PickupStatus,
 } from '../lambda/types';
 
 const ITEMS_TABLE = 'megurimono-items';
 const BIDS_TABLE = 'megurimono-bids';
 const ORGANIZATIONS_TABLE = 'megurimono-organizations';
+const PARTNER_APPLICATIONS_TABLE = 'megurimono-partner-applications';
 const REGION = 'ap-northeast-1';
 const STACK_NAME = 'MeguriMonoStack';
 
@@ -202,6 +205,31 @@ const ORGANIZATIONS: readonly Organization[] = [
   },
 ];
 
+// ---------- 出品元 申し込み（デモ表示用） ----------
+
+const PARTNER_APPLICATIONS: readonly PartnerApplication[] = [
+  {
+    applicationId: 'app-demo-tenjin-core',
+    name: '天神コア',
+    type: 'corporate',
+    contactName: '施設管理部 山田',
+    contactEmail: 'partner@example.com',
+    contactPhone: '092-000-0000',
+    message: '館内での落とし物をめぐりモノで出品したいと考えています。',
+    status: 'new',
+    createdAt: at(-2 * DAYS),
+  },
+  {
+    applicationId: 'app-demo-hakata-ward',
+    name: '博多区役所',
+    type: 'police',
+    contactName: '地域振興課 佐藤',
+    contactEmail: 'ward-partner@example.com',
+    status: 'reviewed',
+    createdAt: at(-10 * DAYS),
+  },
+];
+
 const orgById = new Map(ORGANIZATIONS.map((org) => [org.orgId, org]));
 
 type SeedDef = {
@@ -216,6 +244,7 @@ type SeedDef = {
   bidCount: number;
   status: ItemStatus;
   endOffsetMs: number;
+  paymentStatus?: PaymentStatus;
   pickupStatus?: PickupStatus;
   pickupDate?: string;
   pickupCode?: string;
@@ -451,6 +480,7 @@ const SEEDS: readonly SeedDef[] = [
     bidCount: 12,
     status: 'sold',
     endOffsetMs: -3 * DAYS,
+    paymentStatus: 'unpaid',
     pickupStatus: 'awaiting',
     conditionRank: 'good',
     quantity: 1,
@@ -471,6 +501,7 @@ const SEEDS: readonly SeedDef[] = [
     bidCount: 9,
     status: 'sold',
     endOffsetMs: -5 * DAYS,
+    paymentStatus: 'paid',
     pickupStatus: 'reserved',
     pickupDate: new Date(now + 2 * DAYS).toISOString().slice(0, 10),
     pickupCode: '384912',
@@ -495,6 +526,7 @@ const SEEDS: readonly SeedDef[] = [
     bidCount: 8,
     status: 'sold',
     endOffsetMs: -7 * DAYS,
+    paymentStatus: 'paid',
     pickupStatus: 'completed',
     pickupDate: new Date(now - 2 * DAYS).toISOString().slice(0, 10),
     pickupCode: '551208',
@@ -548,6 +580,7 @@ const buildItems = (
       winnerSub: demoUserSub,
       winnerNickname: DEMO_USER.nickname,
       soldAt: at(seed.endOffsetMs),
+      paymentStatus: seed.paymentStatus ?? 'unpaid',
       pickupStatus: seed.pickupStatus ?? 'awaiting',
       pickupDate: seed.pickupDate,
       pickupCode: seed.pickupCode,
@@ -672,15 +705,19 @@ const main = async (): Promise<void> => {
   const purgedBids = await purgeTable(BIDS_TABLE, ['itemId', 'bidId']);
   const purgedItems = await purgeTable(ITEMS_TABLE, ['itemId']);
   const purgedOrgs = await purgeTable(ORGANIZATIONS_TABLE, ['orgId']);
-  console.log(`Purged ${purgedItems} items, ${purgedBids} bids, and ${purgedOrgs} organizations.`);
+  const purgedApplications = await purgeTable(PARTNER_APPLICATIONS_TABLE, ['applicationId']);
+  console.log(
+    `Purged ${purgedItems} items, ${purgedBids} bids, ${purgedOrgs} organizations, and ${purgedApplications} partner applications.`,
+  );
 
   await batchWrite(ORGANIZATIONS_TABLE, ORGANIZATIONS);
+  await batchWrite(PARTNER_APPLICATIONS_TABLE, PARTNER_APPLICATIONS);
   const bids = buildBids(demoUserSub);
   const items = buildItems(demoUserSub, topBidderMapOf(bids));
   await batchWrite(ITEMS_TABLE, items);
   await batchWrite(BIDS_TABLE, bids);
   console.log(
-    `Seeded ${ORGANIZATIONS.length} organizations, ${items.length} items, and ${bids.length} bids.`,
+    `Seeded ${ORGANIZATIONS.length} organizations, ${PARTNER_APPLICATIONS.length} partner applications, ${items.length} items, and ${bids.length} bids.`,
   );
 };
 

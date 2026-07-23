@@ -2,15 +2,18 @@ import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
 import { RequireAdmin, RequireAuth } from './components/RequireAdmin';
+import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { AdminItemForm } from './pages/admin/AdminItemForm';
 import { AdminItems } from './pages/admin/AdminItems';
 import { AdminOrganizations } from './pages/admin/AdminOrganizations';
+import { AdminPartnerApplications } from './pages/admin/AdminPartnerApplications';
 import { BidMonitor } from './pages/admin/BidMonitor';
-import { Dashboard } from './pages/Dashboard';
 import { Home } from './pages/Home';
 import { ItemDetail } from './pages/ItemDetail';
+import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
 import { MyPage } from './pages/MyPage';
+import { PartnerApply } from './pages/PartnerApply';
 import { SignUp } from './pages/SignUp';
 
 const ScrollToTop = (): null => {
@@ -50,7 +53,7 @@ const NotFound = (): JSX.Element => (
   <div className="container section">
     <h1 className="page-title">ページが見つかりません</h1>
     <p className="page-lead">お探しのページは存在しないか、移動した可能性があります。</p>
-    <Link className="btn btn--primary btn--fit" to="/">
+    <Link className="btn btn--primary btn--fit" to="/items">
       出品一覧へ戻る
     </Link>
   </div>
@@ -143,11 +146,11 @@ const Header = (): JSX.Element => {
 
         <div id="site-menu" className={`site-menu${menuOpen ? ' site-menu--open' : ''}`}>
           <nav className="site-nav" aria-label="メインナビゲーション">
-            <NavLink to="/" end className="site-nav__link">
+            <NavLink to="/items" className="site-nav__link">
               出品一覧
             </NavLink>
-            <NavLink to="/dashboard" className="site-nav__link">
-              収益ダッシュボード
+            <NavLink to="/partners/apply" className="site-nav__link">
+              企業の方へ
             </NavLink>
             {isAuthed ? (
               <NavLink to="/mypage" className="site-nav__link">
@@ -178,9 +181,10 @@ export const App = (): JSX.Element => (
 
     <main id="main">
       <Routes>
-        <Route path="/" element={<Home />} />
+        <Route path="/" element={<Landing />} />
+        <Route path="/items" element={<Home />} />
         <Route path="/items/:itemId" element={<ItemDetail />} />
-        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/partners/apply" element={<PartnerApply />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<SignUp />} />
         <Route
@@ -208,10 +212,26 @@ export const App = (): JSX.Element => (
           }
         />
         <Route
+          path="/admin/partners"
+          element={
+            <RequireAdmin>
+              <AdminPartnerApplications />
+            </RequireAdmin>
+          }
+        />
+        <Route
           path="/admin/monitor"
           element={
             <RequireAdmin>
               <BidMonitor />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="/admin/dashboard"
+          element={
+            <RequireAdmin>
+              <AdminDashboard />
             </RequireAdmin>
           }
         />

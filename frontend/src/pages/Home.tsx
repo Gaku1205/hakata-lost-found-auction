@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { fetchItems, fetchStats } from '../api';
+import { fetchItems } from '../api';
 import { ItemCard } from '../components/ItemCard';
-import { yen } from '../format';
 import { useLoadable, useNow } from '../hooks';
 import type { ItemCategory, SearchQuery } from '../types';
 import {
@@ -83,44 +82,16 @@ export const Home = (): JSX.Element => {
     () => fetchItems(query),
     [searchParams.toString()],
   );
-  const [statsResult] = useLoadable(fetchStats, []);
   const nowMs = useNow();
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   return (
-    <>
-      <section className="hero hero--pattern">
-        <div className="container">
-          <h1 className="hero__title">
-            落とし物に、
-            <br className="hero__break" />
-            二度目の物語を。
-          </h1>
-          <p className="hero__lead">
-            博多エリアで警察に届けられ、持ち主が見つからなかった品々。
-            地域のオークションで次の使い手へつなぎ、売上は自治体の歳入と地域振興に還元されます。
-            落札品は郵送ではなく、まちの受取拠点でのお渡しです。
-          </p>
-          {statsResult.state === 'ready' ? (
-            <dl className="hero__stats">
-              <div className="hero__stat">
-                <dt>出品中</dt>
-                <dd>{statsResult.data.activeCount}件</dd>
-              </div>
-              <div className="hero__stat">
-                <dt>地域への還元額</dt>
-                <dd>{yen(statsResult.data.soldTotal)}</dd>
-              </div>
-              <div className="hero__stat">
-                <dt>累計入札</dt>
-                <dd>{statsResult.data.totalBids}件</dd>
-              </div>
-            </dl>
-          ) : null}
-        </div>
-      </section>
+    <section className="container section" aria-label="出品一覧">
+      <h1 className="page-title">出品一覧</h1>
+      <p className="page-lead">
+        博多エリアで警察・企業に届けられ、持ち主が見つからなかった品々です。
+      </p>
 
-      <section className="container section" aria-label="出品一覧">
         <div className="search-bar" role="search" aria-label="出品を検索">
           <div className="search-bar__keyword">
             <label className="sr-only" htmlFor="search-q">
@@ -280,6 +251,5 @@ export const Home = (): JSX.Element => {
           </>
         ) : null}
       </section>
-    </>
   );
 };

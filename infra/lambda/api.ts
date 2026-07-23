@@ -24,6 +24,8 @@ import {
   type BidderSummary,
   type LostItem,
   type Organization,
+  type PartnerApplication,
+  type PartnerApplicationInput,
   type SortKey,
   type Stats,
 } from './types';
@@ -31,6 +33,7 @@ import {
 const ITEMS_TABLE = process.env.ITEMS_TABLE ?? '';
 const BIDS_TABLE = process.env.BIDS_TABLE ?? '';
 const ORGANIZATIONS_TABLE = process.env.ORGANIZATIONS_TABLE ?? '';
+const PARTNER_APPLICATIONS_TABLE = process.env.PARTNER_APPLICATIONS_TABLE ?? '';
 const USER_POOL_ID = process.env.USER_POOL_ID ?? '';
 const USER_POOL_CLIENT_ID = process.env.USER_POOL_CLIENT_ID ?? '';
 const REGION = process.env.AWS_REGION ?? 'ap-northeast-1';
@@ -70,7 +73,7 @@ const json = (statusCode: number, body: unknown): APIGatewayProxyResult => ({
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
-const isLostItem = (value: unknown): value is LostItem => {
+export const isLostItem = (value: unknown): value is LostItem => {
   if (!isRecord(value)) return false;
   return (
     typeof value['itemId'] === 'string' &&
@@ -81,7 +84,7 @@ const isLostItem = (value: unknown): value is LostItem => {
   );
 };
 
-const isOrganization = (value: unknown): value is Organization => {
+export const isOrganization = (value: unknown): value is Organization => {
   if (!isRecord(value)) return false;
   return (
     typeof value['orgId'] === 'string' &&
@@ -90,7 +93,17 @@ const isOrganization = (value: unknown): value is Organization => {
   );
 };
 
-const parseBody = (body: string | null): Record<string, unknown> | null => {
+const isPartnerApplication = (value: unknown): value is PartnerApplication => {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value['applicationId'] === 'string' &&
+    typeof value['name'] === 'string' &&
+    typeof value['type'] === 'string' &&
+    typeof value['status'] === 'string'
+  );
+};
+
+export const parseBody = (body: string | null): Record<string, unknown> | null => {
   if (body === null) return null;
   try {
     const data: unknown = JSON.parse(body);
@@ -127,7 +140,7 @@ type SearchQuery = {
   sort: SortKey;
 };
 
-const parseSearchQuery = (
+export const parseSearchQuery = (
   params: Record<string, string | undefined> | null,
 ): SearchQuery => {
   const get = (key: string): string => {
@@ -150,7 +163,7 @@ const parseSearchQuery = (
   };
 };
 
-const compareBySort = (sort: SortKey) => (a: LostItem, b: LostItem): number => {
+export const compareBySort = (sort: SortKey) => (a: LostItem, b: LostItem): number => {
   switch (sort) {
     case 'price_asc':
       return a.currentPrice - b.currentPrice;
@@ -211,7 +224,7 @@ const getItemDetail = async (itemId: string): Promise<APIGatewayProxyResult> => 
   return json(200, { item, bids: bidsResult.Items ?? [] });
 };
 
-const getStats = async (): Promise<APIGatewayProxyResult> => {
+const adminGetStats = async (): Promise<APIGatewayProxyResult> => {
   const items = await scanAllItems();
   const stats = items.reduce<Stats>(
     (acc, item) => {
@@ -367,6 +380,35 @@ const getMyWins = async (user: AuthUser): Promise<APIGatewayProxyResult> => {
 const generatePickupCode = (): string =>
   String(Math.floor(100000 + Math.random() * 900000));
 
+// ダミー決済: 実際の課金・カード情報の送受信は行わず、支払い済み状態へ遷移させるのみ
+const payForItem = async (itemId: string, user: AuthUser): Promise<APIGatewayProxyResult> => {
+  const itemResult = await doc.send(
+    new GetCommand({ TableName: ITEMS_TABLE, Key: { itemId } }),
+  );
+  const item: unknown = itemResult.Item;
+  if (!isLostItem(item)) return json(404, { message: '出品が見つかりません' });
+  if (item.winnerSub !== user.sub) {
+    return json(403, { message: 'この物品の落札者ではありません' });
+  }
+  if (item.status !== 'sold') {
+    return json(409, { message: 'まだ落札が確定していません' });
+  }
+  if (item.paymentStatus === 'paid') {
+    return json(409, { message: 'すでに支払いが完了しています' });
+  }
+
+  const now = new Date().toISOString();
+  await doc.send(
+    new UpdateCommand({
+      TableName: ITEMS_TABLE,
+      Key: { itemId },
+      UpdateExpression: 'SET paymentStatus = :paid, paidAt = :now',
+      ExpressionAttributeValues: { ':paid': 'paid', ':now': now },
+    }),
+  );
+  return json(200, { paymentStatus: 'paid', paidAt: now });
+};
+
 const reservePickup = async (
   itemId: string,
   body: string | null,
@@ -385,6 +427,9 @@ const reservePickup = async (
   if (!isLostItem(item)) return json(404, { message: '出品が見つかりません' });
   if (item.status !== 'sold' || item.winnerSub !== user.sub) {
     return json(403, { message: 'この物品の落札者ではありません' });
+  }
+  if (item.paymentStatus !== 'paid') {
+    return json(403, { message: '支払いが完了していません。先にお支払いを行ってください' });
   }
   if (item.pickupStatus === 'completed') {
     return json(409, { message: 'すでに受け渡しが完了しています' });
@@ -457,7 +502,7 @@ const addDays = (dateStr: string, days: number): string =>
     .toISOString()
     .slice(0, 10);
 
-const hashString = (value: string): number => {
+export const hashString = (value: string): number => {
   let hash = 0;
   for (const ch of value) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
   return hash;
@@ -465,7 +510,7 @@ const hashString = (value: string): number => {
 
 // itemIdから決定的に整理番号を発行する（同じitemIdなら常に同じ番号）
 // 警察・自治体は遺失物法の「遺失物第X号」形式、企業は施設占有者拾得の管理番号形式にする
-const generateCaseNumber = (org: Organization, itemId: string, foundDate: string): string => {
+export const generateCaseNumber = (org: Organization, itemId: string, foundDate: string): string => {
   const seq = (hashString(itemId) % 9000) + 1000;
   if (org.type === 'police') {
     const reiwaYear = new Date(foundDate).getFullYear() - 2018;
@@ -476,7 +521,7 @@ const generateCaseNumber = (org: Organization, itemId: string, foundDate: string
 };
 
 // 受取拠点の無人ボックス番号（1〜24番）をitemIdから決定的に発行する
-const generateBoxNumber = (itemId: string): number => (hashString(`box-${itemId}`) % 24) + 1;
+export const generateBoxNumber = (itemId: string): number => (hashString(`box-${itemId}`) % 24) + 1;
 
 const parseAdminItemInput = (
   data: Record<string, unknown>,
@@ -610,6 +655,98 @@ const adminCreateOrganization = async (body: string | null): Promise<APIGatewayP
   return json(201, { organization });
 };
 
+// ---------- 出品元 申し込み（PartnerApplication）API ----------
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const parsePartnerApplicationInput = (
+  data: Record<string, unknown>,
+): PartnerApplicationInput | string => {
+  const name = data['name'];
+  const type = data['type'];
+  const contactName = data['contactName'];
+  const contactEmail = data['contactEmail'];
+  const contactPhoneRaw = data['contactPhone'];
+  const messageRaw = data['message'];
+
+  if (typeof name !== 'string' || name.trim() === '' || name.length > 40) {
+    return '法人・団体名は1〜40文字で入力してください';
+  }
+  if (!isOrgType(type)) return '種別を選択してください';
+  if (typeof contactName !== 'string' || contactName.trim() === '' || contactName.length > 40) {
+    return 'ご担当者名は1〜40文字で入力してください';
+  }
+  if (typeof contactEmail !== 'string' || !EMAIL_PATTERN.test(contactEmail.trim())) {
+    return 'メールアドレスの形式が正しくありません';
+  }
+  const contactPhone =
+    typeof contactPhoneRaw === 'string' && contactPhoneRaw.trim() !== ''
+      ? contactPhoneRaw.trim()
+      : undefined;
+  if (contactPhone !== undefined && contactPhone.length > 20) {
+    return '電話番号が長すぎます';
+  }
+  const message =
+    typeof messageRaw === 'string' && messageRaw.trim() !== '' ? messageRaw.trim() : undefined;
+  if (message !== undefined && message.length > 500) {
+    return 'お問い合わせ内容は500文字以内で入力してください';
+  }
+
+  return {
+    name: name.trim(),
+    type,
+    contactName: contactName.trim(),
+    contactEmail: contactEmail.trim(),
+    contactPhone,
+    message,
+  };
+};
+
+const submitPartnerApplication = async (body: string | null): Promise<APIGatewayProxyResult> => {
+  const data = parseBody(body);
+  if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
+  const input = parsePartnerApplicationInput(data);
+  if (typeof input === 'string') return json(400, { message: input });
+
+  const applicationId = `app-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const application: PartnerApplication = {
+    applicationId,
+    ...input,
+    status: 'new',
+    createdAt: new Date().toISOString(),
+  };
+  await doc.send(new PutCommand({ TableName: PARTNER_APPLICATIONS_TABLE, Item: application }));
+  return json(201, { application });
+};
+
+const adminListPartnerApplications = async (): Promise<APIGatewayProxyResult> => {
+  const result = await doc.send(new ScanCommand({ TableName: PARTNER_APPLICATIONS_TABLE }));
+  const applications = (result.Items ?? []).filter(isPartnerApplication);
+  applications.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return json(200, { applications });
+};
+
+const adminReviewPartnerApplication = async (
+  applicationId: string,
+): Promise<APIGatewayProxyResult> => {
+  const result = await doc.send(
+    new GetCommand({ TableName: PARTNER_APPLICATIONS_TABLE, Key: { applicationId } }),
+  );
+  const application: unknown = result.Item;
+  if (!isPartnerApplication(application)) return json(404, { message: '申し込みが見つかりません' });
+
+  await doc.send(
+    new UpdateCommand({
+      TableName: PARTNER_APPLICATIONS_TABLE,
+      Key: { applicationId },
+      UpdateExpression: 'SET #st = :reviewed',
+      ExpressionAttributeNames: { '#st': 'status' },
+      ExpressionAttributeValues: { ':reviewed': 'reviewed' },
+    }),
+  );
+  return json(200, { status: 'reviewed' });
+};
+
 const adminCreateItem = async (body: string | null): Promise<APIGatewayProxyResult> => {
   const data = parseBody(body);
   if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
@@ -676,6 +813,41 @@ const adminUpdateItem = async (
   return json(200, { item: updated });
 };
 
+const queryBidsDesc = async (itemId: string, limit: number): Promise<Bid[]> => {
+  const bidsResult = await doc.send(
+    new QueryCommand({
+      TableName: BIDS_TABLE,
+      KeyConditionExpression: 'itemId = :id',
+      ExpressionAttributeValues: { ':id': itemId },
+      ScanIndexForward: false,
+      Limit: limit,
+    }),
+  );
+  return (bidsResult.Items ?? []).filter(
+    (b): b is Bid =>
+      isRecord(b) && typeof b['amount'] === 'number' && typeof b['bidderSub'] === 'string',
+  );
+};
+
+// 入札から落札者を決定し、落札済み状態のアイテムを組み立てる（手動確定・自動確定の両方から利用）
+export const finalizeSoldItem = (item: LostItem, bids: readonly Bid[], now: Date): LostItem | null => {
+  const winner = bids.find((b) => b.amount === item.currentPrice) ?? bids[0];
+  if (winner === undefined) return null;
+
+  const deadline = new Date(now.getTime() + PICKUP_DEADLINE_DAYS * 24 * 60 * 60 * 1000);
+  return {
+    ...item,
+    status: 'sold',
+    endTime: now.toISOString(),
+    soldAt: now.toISOString(),
+    winnerSub: winner.bidderSub,
+    winnerNickname: winner.bidderName,
+    paymentStatus: 'unpaid',
+    pickupStatus: 'awaiting',
+    pickupDeadline: deadline.toISOString(),
+  };
+};
+
 const adminCloseItem = async (itemId: string): Promise<APIGatewayProxyResult> => {
   const itemResult = await doc.send(
     new GetCommand({ TableName: ITEMS_TABLE, Key: { itemId } }),
@@ -687,38 +859,36 @@ const adminCloseItem = async (itemId: string): Promise<APIGatewayProxyResult> =>
     return json(409, { message: '入札がないため落札確定できません' });
   }
 
-  const bidsResult = await doc.send(
-    new QueryCommand({
-      TableName: BIDS_TABLE,
-      KeyConditionExpression: 'itemId = :id',
-      ExpressionAttributeValues: { ':id': itemId },
-      ScanIndexForward: false,
-      Limit: 50,
-    }),
-  );
-  const bids = (bidsResult.Items ?? []).filter(
-    (b): b is Bid =>
-      isRecord(b) && typeof b['amount'] === 'number' && typeof b['bidderSub'] === 'string',
-  );
-  const winner = bids.find((b) => b.amount === item.currentPrice) ?? bids[0];
-  if (winner === undefined) {
+  const bids = await queryBidsDesc(itemId, 50);
+  const updated = finalizeSoldItem(item, bids, new Date());
+  if (updated === null) {
     return json(409, { message: '入札情報が見つかりません' });
   }
-
-  const now = new Date();
-  const deadline = new Date(now.getTime() + PICKUP_DEADLINE_DAYS * 24 * 60 * 60 * 1000);
-  const updated: LostItem = {
-    ...item,
-    status: 'sold',
-    endTime: now.toISOString(),
-    soldAt: now.toISOString(),
-    winnerSub: winner.bidderSub,
-    winnerNickname: winner.bidderName,
-    pickupStatus: 'awaiting',
-    pickupDeadline: deadline.toISOString(),
-  };
   await doc.send(new PutCommand({ TableName: ITEMS_TABLE, Item: updated }));
   return json(200, { item: updated });
+};
+
+// EventBridge スケジュールから直接起動される自動終了ジョブ（API Gateway を経由しない）
+export const autoCloseHandler = async (): Promise<{ closed: number }> => {
+  const items = await scanAllItems();
+  const nowIso = new Date().toISOString();
+  const expired = items.filter(
+    (item) => item.status === 'active' && item.endTime <= nowIso && item.bidCount > 0,
+  );
+
+  let closed = 0;
+  for (const item of expired) {
+    const bids = await queryBidsDesc(item.itemId, 50);
+    const updated = finalizeSoldItem(item, bids, new Date());
+    if (updated !== null) {
+      await doc.send(new PutCommand({ TableName: ITEMS_TABLE, Item: updated }));
+      closed += 1;
+    }
+  }
+  if (closed > 0) {
+    console.log(`auto-closed ${closed} item(s)`);
+  }
+  return { closed };
 };
 
 const adminCompletePickup = async (
@@ -936,10 +1106,9 @@ export const handler = async (
       if (itemId === undefined) return json(404, { message: 'Not Found' });
       return await getItemDetail(decodeURIComponent(itemId));
     }
-    if (segments[1] === 'stats' && segments.length === 2 && method === 'GET') {
-      return await getStats();
+    if (segments[1] === 'partner-applications' && segments.length === 2 && method === 'POST') {
+      return await submitPartnerApplication(event.body);
     }
-
     // --- ここから認証必須 ---
     const authHeader = event.headers['Authorization'] ?? event.headers['authorization'];
     const user = await authenticate(authHeader);
@@ -954,6 +1123,18 @@ export const handler = async (
       const itemId = segments[2];
       if (itemId === undefined) return json(404, { message: 'Not Found' });
       return await placeBid(decodeURIComponent(itemId), event, user);
+    }
+
+    if (
+      segments[1] === 'items' &&
+      segments.length === 4 &&
+      segments[3] === 'pay' &&
+      method === 'POST'
+    ) {
+      if (user === null) return json(401, { message: 'ログインが必要です' });
+      const itemId = segments[2];
+      if (itemId === undefined) return json(404, { message: 'Not Found' });
+      return await payForItem(decodeURIComponent(itemId), user);
     }
 
     if (
@@ -998,12 +1179,28 @@ export const handler = async (
       if (segments[2] === 'bid-monitor' && segments.length === 3 && method === 'GET') {
         return await adminBidMonitor();
       }
+      if (segments[2] === 'stats' && segments.length === 3 && method === 'GET') {
+        return await adminGetStats();
+      }
       if (segments[2] === 'images' && segments[3] === 'upload-url' && segments.length === 4 && method === 'POST') {
         return await adminImageUploadUrl(event.body);
       }
       if (segments[2] === 'organizations' && segments.length === 3) {
         if (method === 'GET') return await adminListOrganizations();
         if (method === 'POST') return await adminCreateOrganization(event.body);
+      }
+      if (segments[2] === 'partner-applications' && segments.length === 3 && method === 'GET') {
+        return await adminListPartnerApplications();
+      }
+      if (
+        segments[2] === 'partner-applications' &&
+        segments.length === 5 &&
+        segments[4] === 'review' &&
+        method === 'POST'
+      ) {
+        const applicationId = segments[3];
+        if (applicationId === undefined) return json(404, { message: 'Not Found' });
+        return await adminReviewPartnerApplication(decodeURIComponent(applicationId));
       }
       if (segments[2] === 'items' && segments.length === 3 && method === 'POST') {
         return await adminCreateItem(event.body);

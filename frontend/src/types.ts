@@ -2,6 +2,8 @@ export type ItemStatus = 'active' | 'sold';
 
 export type PickupStatus = 'awaiting' | 'reserved' | 'completed';
 
+export type PaymentStatus = 'unpaid' | 'paid';
+
 export type ConditionRank = 'like_new' | 'good' | 'used' | 'damaged';
 
 export const CONDITION_LABELS: Record<ConditionRank, string> = {
@@ -38,6 +40,29 @@ export type AdminOrgInput = {
   name: string;
   type: OrgType;
   contactNote?: string;
+};
+
+export type PartnerApplicationStatus = 'new' | 'reviewed';
+
+export type PartnerApplication = {
+  applicationId: string;
+  name: string;
+  type: OrgType;
+  contactName: string;
+  contactEmail: string;
+  contactPhone?: string;
+  message?: string;
+  status: PartnerApplicationStatus;
+  createdAt: string;
+};
+
+export type PartnerApplicationInput = {
+  name: string;
+  type: OrgType;
+  contactName: string;
+  contactEmail: string;
+  contactPhone?: string;
+  message?: string;
 };
 
 export type ItemCategory =
@@ -81,6 +106,8 @@ export type LostItem = {
   winnerSub?: string;
   winnerNickname?: string;
   soldAt?: string;
+  paymentStatus?: PaymentStatus;
+  paidAt?: string;
   pickupStatus?: PickupStatus;
   pickupDate?: string;
   pickupCode?: string;
@@ -214,6 +241,11 @@ export const PICKUP_STATUS_LABELS: Record<PickupStatus, string> = {
   awaiting: '受取予約待ち',
   reserved: '受取予約済み',
   completed: '受け渡し完了',
+};
+
+export const PARTNER_APPLICATION_STATUS_LABELS: Record<PartnerApplicationStatus, string> = {
+  new: '未確認',
+  reviewed: '確認済み',
 };
 
 export const PICKUP_LOCATION_PRESETS: readonly string[] = [

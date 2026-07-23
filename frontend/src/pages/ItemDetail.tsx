@@ -159,7 +159,7 @@ export const ItemDetail = (): JSX.Element => {
             <button type="button" className="btn btn--ghost" onClick={reload}>
               再読み込み
             </button>
-            <Link className="btn btn--ghost" to="/">
+            <Link className="btn btn--ghost" to="/items">
               出品一覧へ戻る
             </Link>
           </div>
@@ -193,7 +193,7 @@ export const ItemDetail = (): JSX.Element => {
   return (
     <div className="container section">
       <nav className="breadcrumb" aria-label="パンくず">
-        <Link to="/">出品一覧</Link>
+        <Link to="/items">出品一覧</Link>
         <span aria-hidden="true"> / </span>
         <span aria-current="page">{item.title}</span>
       </nav>

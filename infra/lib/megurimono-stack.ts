@@ -9,11 +9,15 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 import type { Construct } from 'constructs';
 
 export const ITEMS_TABLE_NAME = 'megurimono-items';
 export const BIDS_TABLE_NAME = 'megurimono-bids';
 export const ORGANIZATIONS_TABLE_NAME = 'megurimono-organizations';
+export const PARTNER_APPLICATIONS_TABLE_NAME = 'megurimono-partner-applications';
 
 export class MeguriMonoStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -39,6 +43,14 @@ export class MeguriMonoStack extends cdk.Stack {
     const organizationsTable = new dynamodb.Table(this, 'OrganizationsTable', {
       tableName: ORGANIZATIONS_TABLE_NAME,
       partitionKey: { name: 'orgId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // 企業・自治体からの出品元申し込み
+    const partnerApplicationsTable = new dynamodb.Table(this, 'PartnerApplicationsTable', {
+      tableName: PARTNER_APPLICATIONS_TABLE_NAME,
+      partitionKey: { name: 'applicationId', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
@@ -90,6 +102,7 @@ export class MeguriMonoStack extends cdk.Stack {
         ITEMS_TABLE: itemsTable.tableName,
         BIDS_TABLE: bidsTable.tableName,
         ORGANIZATIONS_TABLE: organizationsTable.tableName,
+        PARTNER_APPLICATIONS_TABLE: partnerApplicationsTable.tableName,
         USER_POOL_ID: userPool.userPoolId,
         USER_POOL_CLIENT_ID: userPoolClient.userPoolClientId,
       },
@@ -101,6 +114,37 @@ export class MeguriMonoStack extends cdk.Stack {
     itemsTable.grantReadWriteData(apiFn);
     bidsTable.grantReadWriteData(apiFn);
     organizationsTable.grantReadWriteData(apiFn);
+    partnerApplicationsTable.grantReadWriteData(apiFn);
+
+    // ---------- オークション自動終了（EventBridge） ----------
+    // 終了時刻を過ぎ、入札がついた出品を毎分スキャンして自動的に落札確定する。
+    // API Gateway を経由せず、同じLambdaコード内の別ハンドラを直接起動する。
+    const autoCloseFn = new lambdaNodejs.NodejsFunction(this, 'AutoCloseFn', {
+      entry: path.join(__dirname, '..', 'lambda', 'api.ts'),
+      handler: 'autoCloseHandler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        ITEMS_TABLE: itemsTable.tableName,
+        BIDS_TABLE: bidsTable.tableName,
+        ORGANIZATIONS_TABLE: organizationsTable.tableName,
+        USER_POOL_ID: userPool.userPoolId,
+        USER_POOL_CLIENT_ID: userPoolClient.userPoolClientId,
+      },
+      bundling: {
+        minify: true,
+        target: 'node20',
+      },
+    });
+    itemsTable.grantReadWriteData(autoCloseFn);
+    bidsTable.grantReadData(autoCloseFn);
+
+    new events.Rule(this, 'AutoCloseRule', {
+      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      targets: [new targets.LambdaFunction(autoCloseFn)],
+    });
 
     const api = new apigateway.LambdaRestApi(this, 'Api', {
       handler: apiFn,
@@ -112,6 +156,78 @@ export class MeguriMonoStack extends cdk.Stack {
         throttlingRateLimit: 10,
         throttlingBurstLimit: 20,
       },
+    });
+
+    // ---------- 可観測性（CloudWatch） ----------
+    // 通知先（SNS等）は未接続。異常時に手動でコンソールを確認する運用を想定。
+    const alarmDefaults = {
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    };
+
+    new cloudwatch.Alarm(this, 'ApiErrorsAlarm', {
+      alarmDescription: 'ApiFn（メインAPI）でエラーが発生しています',
+      metric: apiFn.metricErrors({ period: cdk.Duration.minutes(5) }),
+      threshold: 1,
+      ...alarmDefaults,
+    });
+
+    new cloudwatch.Alarm(this, 'ApiThrottlesAlarm', {
+      alarmDescription: 'ApiFn がスロットリングされています',
+      metric: apiFn.metricThrottles({ period: cdk.Duration.minutes(5) }),
+      threshold: 1,
+      ...alarmDefaults,
+    });
+
+    new cloudwatch.Alarm(this, 'AutoCloseErrorsAlarm', {
+      alarmDescription: 'AutoCloseFn（オークション自動終了）でエラーが発生しています',
+      metric: autoCloseFn.metricErrors({ period: cdk.Duration.minutes(5) }),
+      threshold: 1,
+      ...alarmDefaults,
+    });
+
+    new cloudwatch.Alarm(this, 'Api5xxAlarm', {
+      alarmDescription: 'API Gateway で5xxエラーが発生しています',
+      metric: api.metricServerError({ period: cdk.Duration.minutes(5) }),
+      threshold: 1,
+      ...alarmDefaults,
+    });
+
+    const dashboard = new cloudwatch.Dashboard(this, 'OpsDashboard', {
+      dashboardName: 'MeguriMono-Ops',
+    });
+    dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'ApiFn 呼び出し数／エラー数',
+        left: [apiFn.metricInvocations({ period: cdk.Duration.minutes(5) })],
+        right: [apiFn.metricErrors({ period: cdk.Duration.minutes(5) })],
+        width: 12,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'ApiFn レイテンシ（p50 / p99）',
+        left: [
+          apiFn.metricDuration({ period: cdk.Duration.minutes(5), statistic: 'p50' }),
+          apiFn.metricDuration({ period: cdk.Duration.minutes(5), statistic: 'p99' }),
+        ],
+        width: 12,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'API Gateway 4xx / 5xx',
+        left: [api.metricClientError({ period: cdk.Duration.minutes(5) })],
+        right: [api.metricServerError({ period: cdk.Duration.minutes(5) })],
+        width: 12,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'AutoCloseFn 呼び出し数／エラー数（1分間隔）',
+        left: [autoCloseFn.metricInvocations({ period: cdk.Duration.minutes(5) })],
+        right: [autoCloseFn.metricErrors({ period: cdk.Duration.minutes(5) })],
+        width: 12,
+      }),
+    );
+
+    new cdk.CfnOutput(this, 'DashboardUrl', {
+      value: `https://${this.region}.console.aws.amazon.com/cloudwatch/home?region=${this.region}#dashboards:name=${dashboard.dashboardName}`,
     });
 
     // ---------- フロントエンド配信（S3 + CloudFront） ----------

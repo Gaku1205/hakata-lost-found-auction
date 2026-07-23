@@ -1,9 +1,10 @@
 import { useMemo } from 'react';
-import { fetchItems, fetchStats } from '../api';
-import { yen } from '../format';
-import { useLoadable } from '../hooks';
-import type { ItemCategory, LostItem, Stats } from '../types';
-import { CATEGORY_LABELS, CATEGORY_ORDER } from '../types';
+import { adminFetchStats, fetchItems } from '../../api';
+import { yen } from '../../format';
+import { useLoadable } from '../../hooks';
+import type { ItemCategory, LostItem, Stats } from '../../types';
+import { CATEGORY_LABELS, CATEGORY_ORDER } from '../../types';
+import { AdminTabs } from './AdminTabs';
 
 const MUNICIPAL_RATE = 0.6;
 
@@ -99,14 +100,15 @@ const CategoryBars = ({ items }: { items: readonly LostItem[] }): JSX.Element =>
   );
 };
 
-export const Dashboard = (): JSX.Element => {
-  const [statsResult, reloadStats] = useLoadable(fetchStats, []);
+export const AdminDashboard = (): JSX.Element => {
+  const [statsResult, reloadStats] = useLoadable(adminFetchStats, []);
   const [itemsResult, reloadItems] = useLoadable(fetchItems, []);
 
   if (statsResult.state === 'loading' || itemsResult.state === 'loading') {
     return (
       <div className="container section" aria-busy="true">
-        <h1 className="page-title">収益ダッシュボード</h1>
+        <h1 className="page-title">管理画面 — 収益ダッシュボード</h1>
+        <AdminTabs />
         <div className="tiles">
           {Array.from({ length: 4 }, (_, i) => (
             <div key={i} className="tile tile--skeleton" aria-hidden="true" />
@@ -121,7 +123,8 @@ export const Dashboard = (): JSX.Element => {
       statsResult.state === 'error' ? statsResult.message : itemsResult.state === 'error' ? itemsResult.message : '';
     return (
       <div className="container section">
-        <h1 className="page-title">収益ダッシュボード</h1>
+        <h1 className="page-title">管理画面 — 収益ダッシュボード</h1>
+        <AdminTabs />
         <div className="notice notice--error" role="alert">
           <p>{message}</p>
           <button
@@ -144,10 +147,11 @@ export const Dashboard = (): JSX.Element => {
 
   return (
     <div className="container section">
-      <h1 className="page-title">収益ダッシュボード</h1>
+      <h1 className="page-title">管理画面 — 収益ダッシュボード</h1>
       <p className="page-lead">
-        オークションの売上は、自治体の歳入と地域振興事業に還元されます。
+        落札実績と収益配分の状況を確認できます（運営担当者専用）。
       </p>
+      <AdminTabs />
 
       <div className="tiles">
         <StatTile

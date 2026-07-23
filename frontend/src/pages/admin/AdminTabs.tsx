@@ -8,8 +8,14 @@ export const AdminTabs = (): JSX.Element => (
     <NavLink to="/admin/organizations" className="admin-tabs__tab">
       出品元管理
     </NavLink>
+    <NavLink to="/admin/partners" className="admin-tabs__tab">
+      出品元申し込み
+    </NavLink>
     <NavLink to="/admin/monitor" className="admin-tabs__tab">
       入札監視
+    </NavLink>
+    <NavLink to="/admin/dashboard" className="admin-tabs__tab">
+      収益ダッシュボード
     </NavLink>
   </nav>
 );

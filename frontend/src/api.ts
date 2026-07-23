@@ -8,6 +8,9 @@ import type {
   LostItem,
   MonitorBid,
   Organization,
+  PartnerApplication,
+  PartnerApplicationInput,
+  PaymentStatus,
   PickupStatus,
   SearchQuery,
   Stats,
@@ -77,8 +80,12 @@ type PickupReservationResponse = {
   pickupBoxNumber: number;
 };
 type PickupCompleteResponse = { pickupStatus: PickupStatus };
+type PaymentResponse = { paymentStatus: PaymentStatus; paidAt: string };
 type OrganizationsResponse = { organizations: Organization[] };
 type OrganizationResponse = { organization: Organization };
+type PartnerApplicationsResponse = { applications: PartnerApplication[] };
+type PartnerApplicationResponse = { application: PartnerApplication };
+type PartnerApplicationReviewResponse = { status: 'reviewed' };
 
 const isItemsResponse = (value: unknown): value is ItemsResponse =>
   isRecord(value) && Array.isArray(value.items) && value.items.every(isLostItem);
@@ -137,6 +144,9 @@ const isPickupCompleteResponse = (value: unknown): value is PickupCompleteRespon
   isRecord(value) &&
   (value.pickupStatus === 'reserved' || value.pickupStatus === 'completed');
 
+const isPaymentResponse = (value: unknown): value is PaymentResponse =>
+  isRecord(value) && value.paymentStatus === 'paid' && typeof value.paidAt === 'string';
+
 const isOrganization = (value: unknown): value is Organization =>
   isRecord(value) &&
   typeof value.orgId === 'string' &&
@@ -149,6 +159,25 @@ const isOrganizationsResponse = (value: unknown): value is OrganizationsResponse
 
 const isOrganizationResponse = (value: unknown): value is OrganizationResponse =>
   isRecord(value) && isOrganization(value.organization);
+
+const isPartnerApplication = (value: unknown): value is PartnerApplication =>
+  isRecord(value) &&
+  typeof value.applicationId === 'string' &&
+  typeof value.name === 'string' &&
+  isOrgType(value.type) &&
+  typeof value.contactName === 'string' &&
+  typeof value.contactEmail === 'string' &&
+  (value.status === 'new' || value.status === 'reviewed') &&
+  typeof value.createdAt === 'string';
+
+const isPartnerApplicationsResponse = (value: unknown): value is PartnerApplicationsResponse =>
+  isRecord(value) && Array.isArray(value.applications) && value.applications.every(isPartnerApplication);
+
+const isPartnerApplicationResponse = (value: unknown): value is PartnerApplicationResponse =>
+  isRecord(value) && isPartnerApplication(value.application);
+
+const isPartnerApplicationReviewResponse = (value: unknown): value is PartnerApplicationReviewResponse =>
+  isRecord(value) && value.status === 'reviewed';
 
 const isAnything = (_value: unknown): _value is unknown => true;
 
@@ -214,7 +243,10 @@ export const fetchItems = (query?: SearchQuery): Promise<ItemsResponse> => {
 export const fetchItemDetail = (itemId: string): Promise<ItemDetailResponse> =>
   request(`/api/items/${encodeURIComponent(itemId)}`, isItemDetailResponse);
 
-export const fetchStats = (): Promise<Stats> => request('/api/stats', isStats);
+export const postPartnerApplication = (
+  input: PartnerApplicationInput,
+): Promise<PartnerApplicationResponse> =>
+  request('/api/partner-applications', isPartnerApplicationResponse, jsonInit('POST', input));
 
 // ---------- 認証つき（一般） ----------
 
@@ -227,6 +259,12 @@ export const postBid = (itemId: string, amount: number): Promise<BidResponse> =>
 
 export const fetchMyWins = (): Promise<ItemsResponse> =>
   request('/api/me/wins', isItemsResponse);
+
+// ダミー決済（実際の課金は発生しない）
+export const postPayment = (itemId: string): Promise<PaymentResponse> =>
+  request(`/api/items/${encodeURIComponent(itemId)}/pay`, isPaymentResponse, {
+    method: 'POST',
+  });
 
 export const postPickupReservation = (
   itemId: string,
@@ -284,6 +322,8 @@ export const adminDeleteItem = (itemId: string): Promise<unknown> =>
 export const adminFetchBidMonitor = (): Promise<BidMonitor> =>
   request('/api/admin/bid-monitor', isBidMonitor);
 
+export const adminFetchStats = (): Promise<Stats> => request('/api/admin/stats', isStats);
+
 type ImageUploadUrlResponse = { uploadUrl: string; imageUrl: string };
 
 const isImageUploadUrlResponse = (value: unknown): value is ImageUploadUrlResponse =>
@@ -306,3 +346,15 @@ export const adminCreateOrganization = (
   input: AdminOrgInput,
 ): Promise<OrganizationResponse> =>
   request('/api/admin/organizations', isOrganizationResponse, jsonInit('POST', input));
+
+export const adminListPartnerApplications = (): Promise<PartnerApplicationsResponse> =>
+  request('/api/admin/partner-applications', isPartnerApplicationsResponse);
+
+export const adminReviewPartnerApplication = (
+  applicationId: string,
+): Promise<PartnerApplicationReviewResponse> =>
+  request(
+    `/api/admin/partner-applications/${encodeURIComponent(applicationId)}/review`,
+    isPartnerApplicationReviewResponse,
+    { method: 'POST' },
+  );

@@ -46,6 +46,13 @@ const hasActiveFilter = (query: SearchQuery): boolean =>
   query.maxPrice !== '' ||
   query.sort !== 'end_asc';
 
+const PAGE_SIZE = 20;
+
+const pageFromParams = (params: URLSearchParams): number => {
+  const raw = Number(params.get('page'));
+  return Number.isInteger(raw) && raw > 0 ? raw : 1;
+};
+
 export const Home = (): JSX.Element => {
   const [searchParams, setSearchParams] = useSearchParams();
   const query = useMemo(() => queryFromParams(searchParams), [searchParams]);
@@ -84,6 +91,25 @@ export const Home = (): JSX.Element => {
   );
   const nowMs = useNow();
   const [filtersOpen, setFiltersOpen] = useState(false);
+
+  const totalItems = result.state === 'ready' ? result.data.items.length : 0;
+  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+  const page = Math.min(pageFromParams(searchParams), totalPages);
+  const pageItems =
+    result.state === 'ready'
+      ? result.data.items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+      : [];
+
+  const goToPage = (nextPage: number): void => {
+    const next = new URLSearchParams(searchParams);
+    if (nextPage <= 1) {
+      next.delete('page');
+    } else {
+      next.set('page', String(nextPage));
+    }
+    setSearchParams(next);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   return (
     <section className="container section" aria-label="出品一覧">
@@ -229,6 +255,9 @@ export const Home = (): JSX.Element => {
             <div className="result-row">
               <p className="result-count" aria-live="polite">
                 {result.data.items.length}件の出品
+                {totalPages > 1
+                  ? `（${(page - 1) * PAGE_SIZE + 1}〜${Math.min(page * PAGE_SIZE, totalItems)}件を表示）`
+                  : ''}
               </p>
               {hasActiveFilter(query) ? (
                 <button
@@ -241,12 +270,46 @@ export const Home = (): JSX.Element => {
               ) : null}
             </div>
             <div className="grid">
-              {result.data.items.map((item, index) => (
+              {pageItems.map((item, index) => (
                 <ItemCard key={item.itemId} item={item} nowMs={nowMs} index={index} />
               ))}
             </div>
             {result.data.items.length === 0 ? (
               <p className="empty">条件に合う出品が見つかりません。条件を変えてお試しください。</p>
+            ) : null}
+            {totalPages > 1 ? (
+              <nav className="pagination" aria-label="ページ送り">
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--small"
+                  disabled={page <= 1}
+                  onClick={() => goToPage(page - 1)}
+                >
+                  前へ
+                </button>
+                <div className="pagination__pages">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      className="chip-filter"
+                      aria-current={n === page ? 'page' : undefined}
+                      aria-pressed={n === page}
+                      onClick={() => goToPage(n)}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--small"
+                  disabled={page >= totalPages}
+                  onClick={() => goToPage(page + 1)}
+                >
+                  次へ
+                </button>
+              </nav>
             ) : null}
           </>
         ) : null}

@@ -12,6 +12,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { CloudFormationClient, DescribeStacksCommand, DescribeStackResourcesCommand, DescribeStackEventsCommand } from '@aws-sdk/client-cloudformation';
 import { authenticate, type AuthUser } from './auth';
 import {
   isConditionRank,
@@ -60,6 +61,7 @@ const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
   marshallOptions: { removeUndefinedValues: true },
 });
 const s3 = new S3Client({});
+const cfn = new CloudFormationClient({});
 
 const json = (statusCode: number, body: unknown): APIGatewayProxyResult => ({
   statusCode,
@@ -1083,6 +1085,52 @@ const adminDeleteItem = async (itemId: string): Promise<APIGatewayProxyResult> =
   return json(200, { deleted: itemId, deletedBids: bidKeys.length });
 };
 
+const adminGetCloudFormation = async (): Promise<APIGatewayProxyResult> => {
+  const stackName = 'MeguriMonoStack';
+  try {
+    const stackResult = await cfn.send(new DescribeStacksCommand({ StackName: stackName }));
+    const stack = stackResult.Stacks?.[0];
+    if (!stack) return json(404, { message: 'スタックが見つかりません' });
+
+    const resourcesResult = await cfn.send(
+      new DescribeStackResourcesCommand({ StackName: stackName }),
+    );
+    const resources = (resourcesResult.StackResources ?? []).map((r) => ({
+      logicalId: r.LogicalResourceId,
+      physicalId: r.PhysicalResourceId,
+      type: r.ResourceType,
+      status: r.ResourceStatus,
+      timestamp: r.Timestamp?.toISOString(),
+    }));
+
+    const eventsResult = await cfn.send(
+      new DescribeStackEventsCommand({ StackName: stackName }),
+    );
+    const events = (eventsResult.StackEvents ?? [])
+      .slice(0, 10)
+      .map((e) => ({
+        timestamp: e.Timestamp?.toISOString(),
+        logicalId: e.LogicalResourceId,
+        status: e.ResourceStatus,
+        reason: e.ResourceStatusReason,
+      }));
+
+    return json(200, {
+      stack: {
+        name: stack.StackName,
+        status: stack.StackStatus,
+        creationTime: stack.CreationTime?.toISOString(),
+        lastUpdatedTime: stack.LastUpdatedTime?.toISOString(),
+      },
+      resources,
+      events,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'CloudFormation 取得エラー';
+    return json(500, { message });
+  }
+};
+
 // ---------- ルーティング ----------
 
 export const handler = async (
@@ -1181,6 +1229,9 @@ export const handler = async (
       }
       if (segments[2] === 'stats' && segments.length === 3 && method === 'GET') {
         return await adminGetStats();
+      }
+      if (segments[2] === 'cloudformation' && segments.length === 3 && method === 'GET') {
+        return await adminGetCloudFormation();
       }
       if (segments[2] === 'images' && segments[3] === 'upload-url' && segments.length === 4 && method === 'POST') {
         return await adminImageUploadUrl(event.body);

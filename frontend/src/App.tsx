@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
 import { RequireAdmin, RequireAuth } from './components/RequireAdmin';
+import { AdminCloudFormation } from './pages/admin/AdminCloudFormation';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { AdminItemForm } from './pages/admin/AdminItemForm';
 import { AdminItems } from './pages/admin/AdminItems';
@@ -232,6 +233,14 @@ export const App = (): JSX.Element => (
           element={
             <RequireAdmin>
               <AdminDashboard />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="/admin/cloudformation"
+          element={
+            <RequireAdmin>
+              <AdminCloudFormation />
             </RequireAdmin>
           }
         />

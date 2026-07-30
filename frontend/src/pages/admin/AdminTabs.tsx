@@ -17,5 +17,8 @@ export const AdminTabs = (): JSX.Element => (
     <NavLink to="/admin/dashboard" className="admin-tabs__tab">
       収益ダッシュボード
     </NavLink>
+    <NavLink to="/admin/cloudformation" className="admin-tabs__tab">
+      インフラ
+    </NavLink>
   </nav>
 );

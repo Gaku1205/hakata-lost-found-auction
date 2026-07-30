@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambdaNodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
@@ -115,6 +116,12 @@ export class MeguriMonoStack extends cdk.Stack {
     bidsTable.grantReadWriteData(apiFn);
     organizationsTable.grantReadWriteData(apiFn);
     partnerApplicationsTable.grantReadWriteData(apiFn);
+    apiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['cloudformation:DescribeStacks', 'cloudformation:DescribeStackResources', 'cloudformation:DescribeStackEvents'],
+        resources: ['*'],
+      }),
+    );
 
     // ---------- オークション自動終了（EventBridge） ----------
     // 終了時刻を過ぎ、入札がついた出品を毎分スキャンして自動的に落札確定する。

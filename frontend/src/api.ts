@@ -358,3 +358,31 @@ export const adminReviewPartnerApplication = (
     isPartnerApplicationReviewResponse,
     { method: 'POST' },
   );
+
+type CloudFormationInfo = {
+  stack: {
+    name: string;
+    status: string;
+    creationTime: string;
+    lastUpdatedTime?: string;
+  };
+  resources: Array<{
+    logicalId?: string;
+    physicalId?: string;
+    type?: string;
+    status?: string;
+    timestamp?: string;
+  }>;
+  events: Array<{
+    timestamp?: string;
+    logicalId?: string;
+    status?: string;
+    reason?: string;
+  }>;
+};
+
+const isCloudFormationInfo = (value: unknown): value is CloudFormationInfo =>
+  isRecord(value) && isRecord(value.stack) && Array.isArray(value.resources) && Array.isArray(value.events);
+
+export const adminFetchCloudFormation = (): Promise<CloudFormationInfo> =>
+  request('/api/admin/cloudformation', isCloudFormationInfo);

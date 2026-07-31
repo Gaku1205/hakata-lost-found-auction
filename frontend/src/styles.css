@@ -1872,6 +1872,33 @@ button {
   font-family: inherit;
 }
 
+/* ---------- 出品画像のAI自動入力 ---------- */
+.ai-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--c-border);
+  background: var(--c-indigo-tint);
+  font-size: 13px;
+  color: var(--c-indigo-deep);
+}
+
+.ai-status--done {
+  border-color: var(--c-green);
+  background: var(--c-green-soft);
+  color: var(--c-green);
+}
+
+.ai-status--error {
+  border-color: var(--c-red);
+  background: var(--c-red-soft);
+  color: var(--c-red);
+}
+
 /* ---------- 出品元 問い合わせ履歴 ---------- */
 .inquiry-history-heading {
   margin-top: 32px;

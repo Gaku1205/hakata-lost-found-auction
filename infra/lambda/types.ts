@@ -214,3 +214,15 @@ export type AdminItemInput = {
   color?: string;
   brand?: string;
 };
+
+// 出品画像のAI解析結果。写真から判断できなかった項目は空文字で返る。
+export type ItemSuggestion = {
+  title: string;
+  category: ItemCategory;
+  conditionRank: ConditionRank;
+  description: string;
+  color: string;
+  brand: string;
+  size: string;
+  accessories: string;
+};

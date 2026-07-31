@@ -8,6 +8,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
@@ -127,15 +128,25 @@ export class MeguriMonoStack extends cdk.Stack {
       description: 'めぐりモノ 出品元（警察・自治体／企業）アカウント',
     });
 
+    // 出品画像のAI解析（Claude）に使うAPIキー。値はデプロイ後に手動で設定する:
+    //   aws secretsmanager put-secret-value --secret-id megurimono/anthropic-api-key --secret-string '<APIキー>'
+    const anthropicApiKeySecret = new secretsmanager.Secret(this, 'AnthropicApiKey', {
+      secretName: 'megurimono/anthropic-api-key',
+      description: 'Anthropic APIキー（出品画像のAI解析用）',
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // ---------- API（Lambda + API Gateway） ----------
     const apiFn = new lambdaNodejs.NodejsFunction(this, 'ApiFn', {
       entry: path.join(__dirname, '..', 'lambda', 'api.ts'),
       handler: 'handler',
       runtime: lambda.Runtime.NODEJS_20_X,
       architecture: lambda.Architecture.ARM_64,
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(10),
+      memorySize: 512,
+      // AI画像解析は数秒かかるため、API Gateway(REST)の上限である29秒まで許容する
+      timeout: cdk.Duration.seconds(29),
       environment: {
+        ANTHROPIC_API_KEY_SECRET_ARN: anthropicApiKeySecret.secretArn,
         ITEMS_TABLE: itemsTable.tableName,
         BIDS_TABLE: bidsTable.tableName,
         BIDDER_INDEX: BIDDER_INDEX_NAME,
@@ -157,6 +168,7 @@ export class MeguriMonoStack extends cdk.Stack {
     partnerApplicationsTable.grantReadWriteData(apiFn);
     favoritesTable.grantReadWriteData(apiFn);
     inquiriesTable.grantReadWriteData(apiFn);
+    anthropicApiKeySecret.grantRead(apiFn);
     apiFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['cloudformation:DescribeStacks', 'cloudformation:DescribeStackResources', 'cloudformation:DescribeStackEvents'],
@@ -322,7 +334,7 @@ export class MeguriMonoStack extends cdk.Stack {
       "script-src 'self'",
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       'font-src https://fonts.gstatic.com',
-      "img-src 'self' data:",
+      "img-src 'self' data: blob:",
       `connect-src 'self' https://cognito-idp.${this.region}.amazonaws.com`,
       "object-src 'none'",
       "base-uri 'self'",

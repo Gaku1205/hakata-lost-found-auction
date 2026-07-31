@@ -6,6 +6,7 @@ import type {
   BidMonitor,
   BidderSummary,
   Inquiry,
+  ItemSuggestion,
   LostItem,
   MonitorBid,
   Organization,
@@ -16,7 +17,7 @@ import type {
   SearchQuery,
   Stats,
 } from './types';
-import { isItemCategory, isOrgType } from './types';
+import { isConditionRank, isItemCategory, isOrgType } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -355,6 +356,16 @@ export const orgRequestImageUploadUrl = (
     jsonInit('POST', { itemId, contentType }),
   );
 
+export const orgAnalyzeItemImage = (
+  imageBase64: string,
+  mediaType: string,
+): Promise<ItemSuggestionResponse> =>
+  request(
+    '/api/org/images/analyze',
+    isItemSuggestionResponse,
+    jsonInit('POST', { imageBase64, mediaType }),
+  );
+
 // ダミー決済（実際の課金は発生しない）
 export const postPayment = (itemId: string): Promise<PaymentResponse> =>
   request(`/api/items/${encodeURIComponent(itemId)}/pay`, isPaymentResponse, {
@@ -419,6 +430,22 @@ export const adminFetchBidMonitor = (): Promise<BidMonitor> =>
 
 export const adminFetchStats = (): Promise<Stats> => request('/api/admin/stats', isStats);
 
+type ItemSuggestionResponse = { suggestion: ItemSuggestion };
+
+const isItemSuggestion = (value: unknown): value is ItemSuggestion =>
+  isRecord(value) &&
+  typeof value.title === 'string' &&
+  isItemCategory(value.category) &&
+  isConditionRank(value.conditionRank) &&
+  typeof value.description === 'string' &&
+  typeof value.color === 'string' &&
+  typeof value.brand === 'string' &&
+  typeof value.size === 'string' &&
+  typeof value.accessories === 'string';
+
+const isItemSuggestionResponse = (value: unknown): value is ItemSuggestionResponse =>
+  isRecord(value) && isItemSuggestion(value.suggestion);
+
 type ImageUploadUrlResponse = { uploadUrl: string; imageUrl: string };
 
 const isImageUploadUrlResponse = (value: unknown): value is ImageUploadUrlResponse =>
@@ -432,6 +459,16 @@ export const adminRequestImageUploadUrl = (
     '/api/admin/images/upload-url',
     isImageUploadUrlResponse,
     jsonInit('POST', { itemId, contentType }),
+  );
+
+export const adminAnalyzeItemImage = (
+  imageBase64: string,
+  mediaType: string,
+): Promise<ItemSuggestionResponse> =>
+  request(
+    '/api/admin/images/analyze',
+    isItemSuggestionResponse,
+    jsonInit('POST', { imageBase64, mediaType }),
   );
 
 export const adminListOrganizations = (): Promise<OrganizationsResponse> =>

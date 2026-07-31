@@ -274,3 +274,15 @@ export const PICKUP_LOCATION_PRESETS: readonly string[] = [
   '上川端商店街 受取ステーション',
   '博多市民センター 受付',
 ];
+
+// 出品画像のAI解析結果。写真から判断できなかった項目は空文字で返る。
+export type ItemSuggestion = {
+  title: string;
+  category: ItemCategory;
+  conditionRank: ConditionRank;
+  description: string;
+  color: string;
+  brand: string;
+  size: string;
+  accessories: string;
+};

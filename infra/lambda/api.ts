@@ -14,6 +14,8 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+import Anthropic from '@anthropic-ai/sdk';
 import { CloudFormationClient, DescribeStacksCommand, DescribeStackResourcesCommand, DescribeStackEventsCommand } from '@aws-sdk/client-cloudformation';
 import {
   AdminAddUserToGroupCommand,
@@ -23,11 +25,14 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider';
 import { authenticate, type AuthUser } from './auth';
 import {
+  CONDITION_ORDER,
+  ITEM_CATEGORIES,
   isConditionRank,
   isItemCategory,
   isOrgType,
   isSortKey,
   type AdminItemInput,
+  type ItemSuggestion,
   type AdminOrgInput,
   type Bid,
   type BidderSummary,
@@ -52,6 +57,7 @@ const USER_POOL_ID = process.env.USER_POOL_ID ?? '';
 const USER_POOL_CLIENT_ID = process.env.USER_POOL_CLIENT_ID ?? '';
 const REGION = process.env.AWS_REGION ?? 'ap-northeast-1';
 const IMAGES_BUCKET = process.env.IMAGES_BUCKET ?? '';
+const ANTHROPIC_API_KEY_SECRET_ARN = process.env.ANTHROPIC_API_KEY_SECRET_ARN ?? '';
 
 const PICKUP_DEADLINE_DAYS = 14;
 
@@ -75,6 +81,7 @@ const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 });
 const s3 = new S3Client({});
 const cfn = new CloudFormationClient({});
+const secrets = new SecretsManagerClient({});
 const cognitoIdp = new CognitoIdentityProviderClient({});
 
 const json = (statusCode: number, body: unknown): APIGatewayProxyResult => ({
@@ -1333,6 +1340,165 @@ const adminCompletePickup = async (
   return json(200, { pickupStatus: 'completed' });
 };
 
+// ---------- 出品画像のAI解析 ----------
+
+// 1リクエストあたりの画像サイズ上限。フロント側で長辺1024pxへ縮小してから送る想定。
+const ANALYZE_IMAGE_MAX_BASE64_LENGTH = 3_000_000;
+
+const ITEM_SUGGESTION_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string' },
+    category: { type: 'string', enum: [...ITEM_CATEGORIES] },
+    conditionRank: { type: 'string', enum: [...CONDITION_ORDER] },
+    description: { type: 'string' },
+    color: { type: 'string' },
+    brand: { type: 'string' },
+    size: { type: 'string' },
+    accessories: { type: 'string' },
+  },
+  required: ['title', 'category', 'conditionRank', 'description', 'color', 'brand', 'size', 'accessories'],
+  additionalProperties: false,
+};
+
+const ANALYZE_SYSTEM_PROMPT = `あなたは遺失物オークション「めぐりモノ」の出品担当者です。
+落とし物の写真から、出品フォームの各項目を日本語で埋めてください。
+
+- title: 検索されやすい具体的な品名。40文字以内。「黒 折りたたみ傘（自動開閉）」のように特徴を含める。
+- category: 選択肢から最も近いものを1つ選ぶ。
+- conditionRank: 写真から見て取れる状態。like_new=ほぼ未使用、good=良好、used=使用感あり、damaged=傷や汚れが明確。
+- description: 落札を検討する人が知りたい情報（素材・形状・使用感・目立つ傷や汚れ）を200文字以内で客観的に。断定できない点は書かない。
+- color: 主な色。例「ネイビー」「ブラック×シルバー」。
+- brand: ロゴや型番から確実に読み取れる場合のみ記入。推測しない。
+- size: 寸法や規格が判断できる場合のみ。例「約60cm」「Mサイズ」。
+- accessories: 写真に一緒に写っている付属品。例「専用ケース」「充電ケーブル」。
+
+写真から判断できない項目は必ず空文字にしてください。推測で埋めないこと。
+遺失物なので所有者を特定しうる情報（氏名・住所・口座番号・書類の記載内容など）は一切書かないでください。`;
+
+let cachedAnthropicApiKey: string | null = null;
+
+const getAnthropicApiKey = async (): Promise<string> => {
+  if (cachedAnthropicApiKey !== null) return cachedAnthropicApiKey;
+  const result = await secrets.send(
+    new GetSecretValueCommand({ SecretId: ANTHROPIC_API_KEY_SECRET_ARN }),
+  );
+  const value = result.SecretString;
+  if (value === undefined || value.trim() === '') {
+    throw new Error('Anthropic APIキーが未設定です');
+  }
+  cachedAnthropicApiKey = value.trim();
+  return cachedAnthropicApiKey;
+};
+
+const isItemSuggestion = (value: unknown): value is ItemSuggestion =>
+  isRecord(value) &&
+  typeof value['title'] === 'string' &&
+  isItemCategory(value['category']) &&
+  isConditionRank(value['conditionRank']) &&
+  typeof value['description'] === 'string' &&
+  typeof value['color'] === 'string' &&
+  typeof value['brand'] === 'string' &&
+  typeof value['size'] === 'string' &&
+  typeof value['accessories'] === 'string';
+
+const clip = (value: string, max: number): string => value.trim().slice(0, max);
+
+type AnalyzableMediaType = 'image/jpeg' | 'image/png' | 'image/webp';
+
+const isAnalyzableMediaType = (value: unknown): value is AnalyzableMediaType =>
+  value === 'image/jpeg' || value === 'image/png' || value === 'image/webp';
+
+// 出品画像をClaudeに渡し、出品フォームの各項目を推定して返す。管理者・出品元の双方が利用する。
+const analyzeItemImage = async (body: string | null): Promise<APIGatewayProxyResult> => {
+  if (ANTHROPIC_API_KEY_SECRET_ARN === '') {
+    return json(503, { message: 'AI解析は現在利用できません' });
+  }
+  const data = parseBody(body);
+  if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
+
+  const imageBase64 = data['imageBase64'];
+  const mediaType = data['mediaType'];
+  if (typeof imageBase64 !== 'string' || imageBase64 === '') {
+    return json(400, { message: '画像が指定されていません' });
+  }
+  if (imageBase64.length > ANALYZE_IMAGE_MAX_BASE64_LENGTH) {
+    return json(413, { message: '画像サイズが大きすぎます' });
+  }
+  if (!isAnalyzableMediaType(mediaType)) {
+    return json(400, { message: '画像形式はJPEG・PNG・WEBPのいずれかにしてください' });
+  }
+
+  let apiKey: string;
+  try {
+    apiKey = await getAnthropicApiKey();
+  } catch {
+    return json(503, { message: 'AI解析は現在利用できません（APIキー未設定）' });
+  }
+
+  const anthropic = new Anthropic({ apiKey });
+  let response;
+  try {
+    response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 2048,
+      system: ANALYZE_SYSTEM_PROMPT,
+      output_config: { format: { type: 'json_schema', schema: ITEM_SUGGESTION_SCHEMA } },
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: mediaType, data: imageBase64 },
+            },
+            { type: 'text', text: 'この写真の落とし物について、出品フォームの各項目を埋めてください。' },
+          ],
+        },
+      ],
+    });
+  } catch (err: unknown) {
+    console.error('AI解析に失敗しました', err);
+    // 認証エラーならキャッシュを捨てる。APIキーを差し替えた直後に、
+    // 古い値を掴んだままのコンテナが失敗し続けるのを防ぐ。
+    if (isRecord(err) && err['status'] === 401) {
+      cachedAnthropicApiKey = null;
+      return json(503, { message: 'AI解析は現在利用できません（APIキーが無効です）' });
+    }
+    return json(502, { message: 'AI解析に失敗しました。時間をおいて再度お試しください' });
+  }
+
+  if (response.stop_reason === 'refusal') {
+    return json(422, { message: 'この画像は解析できませんでした。別の写真をお試しください' });
+  }
+  const textBlock = response.content.find((block) => block.type === 'text');
+  if (textBlock === undefined || textBlock.type !== 'text') {
+    return json(502, { message: 'AI解析の結果を取得できませんでした' });
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(textBlock.text);
+  } catch {
+    return json(502, { message: 'AI解析の結果を解釈できませんでした' });
+  }
+  if (!isItemSuggestion(parsed)) {
+    return json(502, { message: 'AI解析の結果が想定した形式ではありませんでした' });
+  }
+
+  const suggestion: ItemSuggestion = {
+    title: clip(parsed.title, 60),
+    category: parsed.category,
+    conditionRank: parsed.conditionRank,
+    description: clip(parsed.description, 300),
+    color: clip(parsed.color, 40),
+    brand: clip(parsed.brand, 40),
+    size: clip(parsed.size, 40),
+    accessories: clip(parsed.accessories, 60),
+  };
+  return json(200, { suggestion });
+};
+
 // 画像アップロード用の署名付きURL発行。管理者・出品元の双方が自分の出品に対して利用する。
 const requestImageUploadUrl = async (body: string | null): Promise<APIGatewayProxyResult> => {
   const data = parseBody(body);
@@ -1701,6 +1867,9 @@ export const handler = async (
       if (segments[2] === 'images' && segments[3] === 'upload-url' && segments.length === 4 && method === 'POST') {
         return await requestImageUploadUrl(event.body);
       }
+      if (segments[2] === 'images' && segments[3] === 'analyze' && segments.length === 4 && method === 'POST') {
+        return await analyzeItemImage(event.body);
+      }
       return json(404, { message: 'Not Found' });
     }
 
@@ -1720,6 +1889,9 @@ export const handler = async (
       }
       if (segments[2] === 'images' && segments[3] === 'upload-url' && segments.length === 4 && method === 'POST') {
         return await requestImageUploadUrl(event.body);
+      }
+      if (segments[2] === 'images' && segments[3] === 'analyze' && segments.length === 4 && method === 'POST') {
+        return await analyzeItemImage(event.body);
       }
       if (segments[2] === 'organizations' && segments.length === 3) {
         if (method === 'GET') return await adminListOrganizations();

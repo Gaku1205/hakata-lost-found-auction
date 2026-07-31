@@ -2,13 +2,22 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ApiError,
+  adminAnalyzeItemImage,
   adminCreateItem,
   adminListOrganizations,
   adminRequestImageUploadUrl,
   adminUpdateItem,
   fetchItemDetail,
 } from '../../api';
-import type { AdminItemInput, ConditionRank, ItemCategory, OrgType, Organization } from '../../types';
+import { prepareImageForAnalysis } from '../../imageAnalysis';
+import type {
+  AdminItemInput,
+  ConditionRank,
+  ItemCategory,
+  ItemSuggestion,
+  OrgType,
+  Organization,
+} from '../../types';
 import {
   CATEGORY_LABELS,
   CATEGORY_ORDER,
@@ -94,6 +103,10 @@ export const AdminItemForm = (): JSX.Element => {
   const [imageRemoved, setImageRemoved] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
 
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzed, setAnalyzed] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [orgsError, setOrgsError] = useState<string | null>(null);
   const [existingOrg, setExistingOrg] = useState<{ name: string; type: OrgType } | null>(null);
@@ -163,6 +176,46 @@ export const AdminItemForm = (): JSX.Element => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
+  // AIの推定値は、まだ入力されていない欄にだけ入れる（入力済みの内容は上書きしない）。
+  // カテゴリと状態ランクは初期値がある選択肢なので、常に推定値を反映する。
+  const applySuggestion = (suggestion: ItemSuggestion): void => {
+    setForm((prev) => ({
+      ...prev,
+      category: suggestion.category,
+      conditionRank: suggestion.conditionRank,
+      title: prev.title.trim() === '' ? suggestion.title : prev.title,
+      description: prev.description.trim() === '' ? suggestion.description : prev.description,
+      color: prev.color.trim() === '' ? suggestion.color : prev.color,
+      brand: prev.brand.trim() === '' ? suggestion.brand : prev.brand,
+      size: prev.size.trim() === '' ? suggestion.size : prev.size,
+      accessories: prev.accessories.trim() === '' ? suggestion.accessories : prev.accessories,
+    }));
+  };
+
+  const runAnalysis = (file: File): void => {
+    setAnalyzing(true);
+    setAnalyzed(false);
+    setAnalyzeError(null);
+    void (async () => {
+      try {
+        const { base64, mediaType } = await prepareImageForAnalysis(file);
+        const { suggestion } = await adminAnalyzeItemImage(base64, mediaType);
+        applySuggestion(suggestion);
+        setAnalyzed(true);
+      } catch (err: unknown) {
+        setAnalyzeError(
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : 'AIによる自動入力に失敗しました',
+        );
+      } finally {
+        setAnalyzing(false);
+      }
+    })();
+  };
+
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -182,6 +235,7 @@ export const AdminItemForm = (): JSX.Element => {
     setImageFile(file);
     setImageRemoved(false);
     setImagePreview(URL.createObjectURL(file));
+    runAnalysis(file);
   };
 
   const handleRemoveImage = (): void => {
@@ -192,6 +246,9 @@ export const AdminItemForm = (): JSX.Element => {
     setImagePreview(null);
     setImageRemoved(true);
     setImageError(null);
+    setAnalyzing(false);
+    setAnalyzed(false);
+    setAnalyzeError(null);
   };
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
@@ -393,8 +450,32 @@ export const AdminItemForm = (): JSX.Element => {
                 {imageError}
               </p>
             ) : null}
+            {analyzing ? (
+              <p className="ai-status" aria-live="polite">
+                AIが画像を読み取って入力欄を補完しています…
+              </p>
+            ) : null}
+            {analyzed ? (
+              <p className="ai-status ai-status--done" aria-live="polite">
+                AIが未入力の欄を自動入力しました。内容を確認・修正してください。
+              </p>
+            ) : null}
+            {analyzeError !== null ? (
+              <p className="ai-status ai-status--error" role="alert">
+                {analyzeError}
+                {imageFile !== null ? (
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--small"
+                    onClick={() => runAnalysis(imageFile)}
+                  >
+                    再試行
+                  </button>
+                ) : null}
+              </p>
+            ) : null}
             <p className="field__help">
-              JPEG・PNG・WEBP、5MBまで。未設定の場合はカテゴリアイコンが表示されます
+              JPEG・PNG・WEBP、5MBまで。画像を選ぶとAIが品名・カテゴリ・状態などを自動入力します
             </p>
           </div>
 

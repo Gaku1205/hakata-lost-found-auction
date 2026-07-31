@@ -317,6 +317,9 @@ export const fetchOrgStats = (): Promise<Stats> => request('/api/org/stats', isS
 export const postOrgInquiry = (message: string): Promise<InquiryResponse> =>
   request('/api/org/inquiries', isInquiryResponse, jsonInit('POST', { message }));
 
+export const fetchOrgInquiries = (): Promise<InquiriesResponse> =>
+  request('/api/org/inquiries', isInquiriesResponse);
+
 type OrgHandoverResponse = { orgHandoverAt: string };
 
 const isOrgHandoverResponse = (value: unknown): value is OrgHandoverResponse =>
@@ -459,6 +462,16 @@ export const adminReviewInquiry = (inquiryId: string): Promise<InquiryReviewResp
     `/api/admin/inquiries/${encodeURIComponent(inquiryId)}/review`,
     isInquiryReviewResponse,
     { method: 'POST' },
+  );
+
+export const adminReplyInquiry = (
+  inquiryId: string,
+  message: string,
+): Promise<InquiryReviewResponse> =>
+  request(
+    `/api/admin/inquiries/${encodeURIComponent(inquiryId)}/reply`,
+    isInquiryReviewResponse,
+    jsonInit('POST', { message }),
   );
 
 export const adminProvisionOrgLogin = (

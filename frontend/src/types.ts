@@ -260,6 +260,8 @@ export type Inquiry = {
   message: string;
   status: InquiryStatus;
   createdAt: string;
+  replyMessage?: string;
+  repliedAt?: string;
 };
 
 export const INQUIRY_STATUS_LABELS: Record<InquiryStatus, string> = {

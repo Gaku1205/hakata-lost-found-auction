@@ -148,6 +148,8 @@ export type Inquiry = {
   message: string;
   status: InquiryStatus;
   createdAt: string;
+  replyMessage?: string;
+  repliedAt?: string;
 };
 
 export type BidderSummary = {

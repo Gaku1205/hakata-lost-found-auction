@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ApiError, adminListInquiries, adminReviewInquiry } from '../../api';
+import { ApiError, adminReplyInquiry, adminListInquiries, adminReviewInquiry } from '../../api';
 import { useLoadable } from '../../hooks';
 import type { Inquiry } from '../../types';
 import { INQUIRY_STATUS_LABELS } from '../../types';
@@ -19,11 +19,30 @@ type RowProps = {
 
 const AdminRow = ({ inquiry, onChanged, onError }: RowProps): JSX.Element => {
   const [busy, setBusy] = useState(false);
+  const [replyText, setReplyText] = useState('');
 
   const handleReview = (): void => {
     setBusy(true);
     adminReviewInquiry(inquiry.inquiryId)
       .then(() => onChanged())
+      .catch((err: unknown) => {
+        onError(err instanceof ApiError ? err.message : '操作に失敗しました');
+      })
+      .finally(() => setBusy(false));
+  };
+
+  const handleReply = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    if (replyText.trim() === '') {
+      onError('返信内容を入力してください');
+      return;
+    }
+    setBusy(true);
+    adminReplyInquiry(inquiry.inquiryId, replyText.trim())
+      .then(() => {
+        setReplyText('');
+        onChanged();
+      })
       .catch((err: unknown) => {
         onError(err instanceof ApiError ? err.message : '操作に失敗しました');
       })
@@ -40,18 +59,43 @@ const AdminRow = ({ inquiry, onChanged, onError }: RowProps): JSX.Element => {
           {INQUIRY_STATUS_LABELS[inquiry.status]}
         </span>
       </td>
-      <td data-label="操作">
-        {inquiry.status === 'new' ? (
-          <button
-            type="button"
-            className="btn btn--ghost btn--small"
-            disabled={busy}
-            onClick={handleReview}
-          >
-            確認済みにする
-          </button>
+      <td data-label="返信">
+        {inquiry.replyMessage !== undefined ? (
+          <>
+            <p>{inquiry.replyMessage}</p>
+            {inquiry.repliedAt !== undefined ? (
+              <p className="table-sub">{dateTimeLabel(inquiry.repliedAt)} 返信済み</p>
+            ) : null}
+          </>
         ) : (
-          <span className="table-sub">—</span>
+          <>
+            <form className="pickup-verify" onSubmit={handleReply}>
+              <label className="sr-only" htmlFor={`reply-${inquiry.inquiryId}`}>
+                返信内容
+              </label>
+              <textarea
+                id={`reply-${inquiry.inquiryId}`}
+                rows={2}
+                maxLength={1000}
+                placeholder="返信内容を入力"
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+              />
+              <button type="submit" className="btn btn--primary btn--small" disabled={busy}>
+                返信する
+              </button>
+            </form>
+            {inquiry.status === 'new' ? (
+              <button
+                type="button"
+                className="btn btn--ghost btn--small"
+                disabled={busy}
+                onClick={handleReview}
+              >
+                返信せず確認済みにする
+              </button>
+            ) : null}
+          </>
         )}
       </td>
     </tr>
@@ -65,7 +109,7 @@ export const AdminInquiries = (): JSX.Element => {
   return (
     <div className="container section">
       <h1 className="page-title">管理画面 — 問い合わせ管理</h1>
-      <p className="page-lead">出品元アカウントから運営宛に届いた問い合わせを確認します。</p>
+      <p className="page-lead">出品元アカウントから運営宛に届いた問い合わせを確認し、返信します。</p>
       <AdminTabs />
 
       {actionError !== null ? (
@@ -110,7 +154,7 @@ export const AdminInquiries = (): JSX.Element => {
                   <th>出品元</th>
                   <th>内容</th>
                   <th>状態</th>
-                  <th>操作</th>
+                  <th>返信</th>
                 </tr>
               </thead>
               <tbody>

@@ -1844,6 +1844,18 @@ button {
   font-family: inherit;
 }
 
+.pickup-verify textarea {
+  flex: 1;
+  min-width: 160px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+}
+
 .org-login-form {
   display: flex;
   flex-direction: column;
@@ -1858,6 +1870,53 @@ button {
   border-radius: 8px;
   font-size: 13px;
   font-family: inherit;
+}
+
+/* ---------- 出品元 問い合わせ履歴 ---------- */
+.inquiry-history-heading {
+  margin-top: 32px;
+}
+
+.inquiry-history {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  list-style: none;
+}
+
+.inquiry-history__item {
+  padding: 14px 16px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+}
+
+.inquiry-history__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.inquiry-history__message {
+  color: var(--c-ink);
+  white-space: pre-wrap;
+}
+
+.inquiry-history__reply {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--c-indigo);
+  background: var(--c-indigo-tint);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.inquiry-history__reply-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--c-indigo);
+  margin-bottom: 4px;
 }
 
 .form-grid {

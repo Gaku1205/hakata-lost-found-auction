@@ -577,6 +577,18 @@ const submitOrgInquiry = async (
   return json(201, { inquiry });
 };
 
+const getOrgInquiries = async (user: AuthUser): Promise<APIGatewayProxyResult> => {
+  if (user.orgId === undefined) {
+    return json(403, { message: 'このアカウントには出品元が紐づいていません' });
+  }
+  const result = await doc.send(new ScanCommand({ TableName: INQUIRIES_TABLE }));
+  const inquiries = (result.Items ?? [])
+    .filter(isInquiry)
+    .filter((inquiry) => inquiry.orgId === user.orgId);
+  inquiries.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return json(200, { inquiries });
+};
+
 const generatePickupCode = (): string =>
   String(Math.floor(100000 + Math.random() * 900000));
 
@@ -1042,6 +1054,42 @@ const adminReviewInquiry = async (inquiryId: string): Promise<APIGatewayProxyRes
     }),
   );
   return json(200, { status: 'reviewed' });
+};
+
+const adminReplyInquiry = async (
+  inquiryId: string,
+  body: string | null,
+): Promise<APIGatewayProxyResult> => {
+  const data = parseBody(body);
+  const messageRaw = data?.['message'];
+  if (typeof messageRaw !== 'string' || messageRaw.trim() === '') {
+    return json(400, { message: '返信内容を入力してください' });
+  }
+  if (messageRaw.trim().length > INQUIRY_MESSAGE_MAX_LENGTH) {
+    return json(400, {
+      message: `返信内容は${INQUIRY_MESSAGE_MAX_LENGTH}文字以内で入力してください`,
+    });
+  }
+
+  const result = await doc.send(new GetCommand({ TableName: INQUIRIES_TABLE, Key: { inquiryId } }));
+  const inquiry: unknown = result.Item;
+  if (!isInquiry(inquiry)) return json(404, { message: '問い合わせが見つかりません' });
+
+  const repliedAt = new Date().toISOString();
+  await doc.send(
+    new UpdateCommand({
+      TableName: INQUIRIES_TABLE,
+      Key: { inquiryId },
+      UpdateExpression: 'SET #st = :reviewed, replyMessage = :reply, repliedAt = :repliedAt',
+      ExpressionAttributeNames: { '#st': 'status' },
+      ExpressionAttributeValues: {
+        ':reviewed': 'reviewed',
+        ':reply': messageRaw.trim(),
+        ':repliedAt': repliedAt,
+      },
+    }),
+  );
+  return json(200, { status: 'reviewed', replyMessage: messageRaw.trim(), repliedAt });
 };
 
 const buildNewItem = (input: AdminItemInput, org: Organization): LostItem => {
@@ -1646,8 +1694,9 @@ export const handler = async (
       if (segments[2] === 'stats' && segments.length === 3 && method === 'GET') {
         return await getOrgStats(user);
       }
-      if (segments[2] === 'inquiries' && segments.length === 3 && method === 'POST') {
-        return await submitOrgInquiry(event.body, user);
+      if (segments[2] === 'inquiries' && segments.length === 3) {
+        if (method === 'GET') return await getOrgInquiries(user);
+        if (method === 'POST') return await submitOrgInquiry(event.body, user);
       }
       if (segments[2] === 'images' && segments[3] === 'upload-url' && segments.length === 4 && method === 'POST') {
         return await requestImageUploadUrl(event.body);
@@ -1711,6 +1760,16 @@ export const handler = async (
         const inquiryId = segments[3];
         if (inquiryId === undefined) return json(404, { message: 'Not Found' });
         return await adminReviewInquiry(decodeURIComponent(inquiryId));
+      }
+      if (
+        segments[2] === 'inquiries' &&
+        segments.length === 5 &&
+        segments[4] === 'reply' &&
+        method === 'POST'
+      ) {
+        const inquiryId = segments[3];
+        if (inquiryId === undefined) return json(404, { message: 'Not Found' });
+        return await adminReplyInquiry(decodeURIComponent(inquiryId), event.body);
       }
       if (segments[2] === 'items' && segments.length === 3 && method === 'POST') {
         return await adminCreateItem(event.body);

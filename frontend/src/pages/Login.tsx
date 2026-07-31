@@ -14,6 +14,11 @@ const DEMO_ACCOUNTS = [
     email: 'admin@example.com',
     password: 'REDACTED_ADMIN_PASSWORD',
   },
+  {
+    label: '出品元でお試しログイン',
+    email: 'org@example.com',
+    password: 'REDACTED_ORG_PASSWORD',
+  },
 ] as const;
 
 const returnToOf = (state: unknown): string => {

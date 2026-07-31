@@ -1,10 +1,99 @@
 import { useState } from 'react';
-import { ApiError, adminCreateOrganization, adminListOrganizations } from '../../api';
+import {
+  ApiError,
+  adminCreateOrganization,
+  adminListOrganizations,
+  adminProvisionOrgLogin,
+} from '../../api';
 import { formatDate } from '../../format';
 import { useLoadable } from '../../hooks';
-import type { OrgType } from '../../types';
+import type { Organization, OrgType } from '../../types';
 import { ORG_TYPE_LABELS } from '../../types';
 import { AdminTabs } from './AdminTabs';
+
+const OrgLoginCell = ({
+  organization,
+  onProvisioned,
+}: {
+  organization: Organization;
+  onProvisioned: () => void;
+}): JSX.Element => {
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  if (organization.loginSub !== undefined) {
+    return <span className="status-chip status-chip--sold">発行済み</span>;
+  }
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn--ghost btn--small" onClick={() => setOpen(true)}>
+        ログインを発行
+      </button>
+    );
+  }
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    setError(null);
+    if (email.trim() === '' || password.trim() === '') {
+      setError('メールアドレスとパスワードを入力してください');
+      return;
+    }
+    setSubmitting(true);
+    adminProvisionOrgLogin(organization.orgId, email.trim(), password)
+      .then(() => {
+        setOpen(false);
+        onProvisioned();
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : '発行に失敗しました');
+      })
+      .finally(() => setSubmitting(false));
+  };
+
+  return (
+    <form className="org-login-form" onSubmit={handleSubmit} noValidate>
+      <input
+        type="email"
+        placeholder="ログイン用メールアドレス"
+        autoComplete="off"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        required
+      />
+      <input
+        type="text"
+        placeholder="初期パスワード（8文字以上）"
+        autoComplete="off"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        required
+      />
+      {error !== null ? (
+        <p className="field__error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      <div className="table-actions">
+        <button type="submit" className="btn btn--primary btn--small" disabled={submitting}>
+          {submitting ? '発行中…' : '発行する'}
+        </button>
+        <button
+          type="button"
+          className="btn btn--ghost btn--small"
+          onClick={() => setOpen(false)}
+          disabled={submitting}
+        >
+          キャンセル
+        </button>
+      </div>
+    </form>
+  );
+};
 
 type FormState = {
   name: string;
@@ -128,6 +217,7 @@ export const AdminOrganizations = (): JSX.Element => {
                   <th>出品元名</th>
                   <th>種別</th>
                   <th>登録日</th>
+                  <th>ログイン</th>
                 </tr>
               </thead>
               <tbody>
@@ -140,6 +230,9 @@ export const AdminOrganizations = (): JSX.Element => {
                       </span>
                     </td>
                     <td data-label="登録日">{formatDate(org.createdAt.slice(0, 10))}</td>
+                    <td data-label="ログイン">
+                      <OrgLoginCell organization={org} onProvisioned={reload} />
+                    </td>
                   </tr>
                 ))}
               </tbody>

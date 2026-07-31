@@ -7,10 +7,10 @@ import {
   adminDeleteItem,
   fetchItems,
 } from '../../api';
-import { yen } from '../../format';
+import { handoverStatus, yen } from '../../format';
 import { useLoadable } from '../../hooks';
 import type { LostItem } from '../../types';
-import { CATEGORY_LABELS, PICKUP_STATUS_LABELS } from '../../types';
+import { CATEGORY_LABELS } from '../../types';
 import { AdminTabs } from './AdminTabs';
 
 const endTimeLabel = (iso: string): string => {
@@ -72,17 +72,19 @@ const AdminRow = ({ item, onChanged, onError }: RowProps): JSX.Element => {
       <td data-label="現在価格" className="table-num">{yen(item.currentPrice)}</td>
       <td data-label="入札" className="table-num">{item.bidCount}件</td>
       <td data-label="終了日時">{endTimeLabel(item.endTime)}</td>
-      <td data-label="受け渡し">
+      <td data-label="購入者">{item.status === 'sold' ? (item.winnerNickname ?? '—') : '—'}</td>
+      <td data-label="受け取り日時">{item.status === 'sold' ? (item.pickupDate ?? '—') : '—'}</td>
+      <td data-label="受け取りBOX番号">
+        {item.status === 'sold' && item.pickupBoxNumber !== undefined
+          ? `${item.pickupBoxNumber}番`
+          : '—'}
+      </td>
+      <td data-label="受け取り状態">
         {item.status === 'sold' ? (
           <>
-            <span className="table-sub">
-              {item.pickupStatus !== undefined
-                ? PICKUP_STATUS_LABELS[item.pickupStatus]
-                : '—'}
+            <span className={`status-chip ${handoverStatus(item).chipClass}`}>
+              {handoverStatus(item).label}
             </span>
-            {item.winnerNickname !== undefined ? (
-              <span className="table-sub">落札者: {item.winnerNickname}</span>
-            ) : null}
             {item.pickupStatus === 'reserved' ? (
               <>
                 <p className="table-sub">
@@ -205,7 +207,10 @@ export const AdminItems = (): JSX.Element => {
                 <th>現在価格</th>
                 <th>入札</th>
                 <th>終了日時</th>
-                <th>受け渡し</th>
+                <th>購入者</th>
+                <th>受け取り日時</th>
+                <th>受け取りBOX番号</th>
+                <th>受け取り状態</th>
                 <th>操作</th>
               </tr>
             </thead>

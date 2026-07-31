@@ -1,7 +1,9 @@
 import type { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { DynamoDBClient, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
+  BatchGetCommand,
   BatchWriteCommand,
+  DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
@@ -13,6 +15,12 @@ import {
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { CloudFormationClient, DescribeStacksCommand, DescribeStackResourcesCommand, DescribeStackEventsCommand } from '@aws-sdk/client-cloudformation';
+import {
+  AdminAddUserToGroupCommand,
+  AdminCreateUserCommand,
+  AdminSetUserPasswordCommand,
+  CognitoIdentityProviderClient,
+} from '@aws-sdk/client-cognito-identity-provider';
 import { authenticate, type AuthUser } from './auth';
 import {
   isConditionRank,
@@ -23,6 +31,8 @@ import {
   type AdminOrgInput,
   type Bid,
   type BidderSummary,
+  type Favorite,
+  type Inquiry,
   type LostItem,
   type Organization,
   type PartnerApplication,
@@ -33,8 +43,11 @@ import {
 
 const ITEMS_TABLE = process.env.ITEMS_TABLE ?? '';
 const BIDS_TABLE = process.env.BIDS_TABLE ?? '';
+const BIDDER_INDEX = process.env.BIDDER_INDEX ?? '';
 const ORGANIZATIONS_TABLE = process.env.ORGANIZATIONS_TABLE ?? '';
 const PARTNER_APPLICATIONS_TABLE = process.env.PARTNER_APPLICATIONS_TABLE ?? '';
+const FAVORITES_TABLE = process.env.FAVORITES_TABLE ?? '';
+const INQUIRIES_TABLE = process.env.INQUIRIES_TABLE ?? '';
 const USER_POOL_ID = process.env.USER_POOL_ID ?? '';
 const USER_POOL_CLIENT_ID = process.env.USER_POOL_CLIENT_ID ?? '';
 const REGION = process.env.AWS_REGION ?? 'ap-northeast-1';
@@ -62,6 +75,7 @@ const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 });
 const s3 = new S3Client({});
 const cfn = new CloudFormationClient({});
+const cognitoIdp = new CognitoIdentityProviderClient({});
 
 const json = (statusCode: number, body: unknown): APIGatewayProxyResult => ({
   statusCode,
@@ -105,6 +119,16 @@ const isPartnerApplication = (value: unknown): value is PartnerApplication => {
   );
 };
 
+const isInquiry = (value: unknown): value is Inquiry => {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value['inquiryId'] === 'string' &&
+    typeof value['orgId'] === 'string' &&
+    typeof value['message'] === 'string' &&
+    typeof value['status'] === 'string'
+  );
+};
+
 export const parseBody = (body: string | null): Record<string, unknown> | null => {
   if (body === null) return null;
   try {
@@ -127,6 +151,25 @@ const scanAllItems = async (): Promise<LostItem[]> => {
   } while (lastKey !== undefined);
   return items;
 };
+
+const batchGetItems = async (itemIds: readonly string[]): Promise<LostItem[]> => {
+  const items: LostItem[] = [];
+  for (let i = 0; i < itemIds.length; i += 100) {
+    const chunk = itemIds.slice(i, i + 100);
+    const result = await doc.send(
+      new BatchGetCommand({
+        RequestItems: { [ITEMS_TABLE]: { Keys: chunk.map((itemId) => ({ itemId })) } },
+      }),
+    );
+    items.push(...(result.Responses?.[ITEMS_TABLE] ?? []).filter(isLostItem));
+  }
+  return items;
+};
+
+const extractItemIds = (records: readonly unknown[]): string[] =>
+  records
+    .filter((r): r is Record<string, unknown> => isRecord(r) && typeof r['itemId'] === 'string')
+    .map((r) => r['itemId'] as string);
 
 // ---------- 公開API ----------
 
@@ -206,8 +249,11 @@ const getItems = async (
   return json(200, { items: sorted });
 };
 
-const getItemDetail = async (itemId: string): Promise<APIGatewayProxyResult> => {
-  const [itemResult, bidsResult] = await Promise.all([
+const getItemDetail = async (
+  itemId: string,
+  user: AuthUser | null,
+): Promise<APIGatewayProxyResult> => {
+  const [itemResult, bidsResult, favoriteResult] = await Promise.all([
     doc.send(new GetCommand({ TableName: ITEMS_TABLE, Key: { itemId } })),
     doc.send(
       new QueryCommand({
@@ -218,17 +264,20 @@ const getItemDetail = async (itemId: string): Promise<APIGatewayProxyResult> => 
         Limit: 20,
       }),
     ),
+    user !== null
+      ? doc.send(new GetCommand({ TableName: FAVORITES_TABLE, Key: { userSub: user.sub, itemId } }))
+      : Promise.resolve(null),
   ]);
   const item: unknown = itemResult.Item;
   if (!isLostItem(item)) {
     return json(404, { message: '出品が見つかりません' });
   }
-  return json(200, { item, bids: bidsResult.Items ?? [] });
+  const isFavorited = favoriteResult !== null && favoriteResult.Item !== undefined;
+  return json(200, { item, bids: bidsResult.Items ?? [], isFavorited });
 };
 
-const adminGetStats = async (): Promise<APIGatewayProxyResult> => {
-  const items = await scanAllItems();
-  const stats = items.reduce<Stats>(
+const computeStats = (items: readonly LostItem[]): Stats =>
+  items.reduce<Stats>(
     (acc, item) => {
       const isSold = item.status === 'sold';
       const hasBids = item.bidCount > 0;
@@ -243,7 +292,10 @@ const adminGetStats = async (): Promise<APIGatewayProxyResult> => {
     },
     { itemCount: 0, activeCount: 0, soldCount: 0, totalBids: 0, soldTotal: 0, activeBidTotal: 0 },
   );
-  return json(200, stats);
+
+const adminGetStats = async (): Promise<APIGatewayProxyResult> => {
+  const items = await scanAllItems();
+  return json(200, computeStats(items));
 };
 
 // ---------- 認証つきAPI（一般ユーザー） ----------
@@ -263,6 +315,10 @@ const placeBid = async (
   event: APIGatewayProxyEvent,
   user: AuthUser,
 ): Promise<APIGatewayProxyResult> => {
+  if (user.isOrg) {
+    return json(403, { message: '出品元アカウントは入札できません' });
+  }
+
   const data = parseBody(event.body);
   const amount = data?.['amount'];
   if (typeof amount !== 'number' || !Number.isInteger(amount) || amount < 1 || amount > 1_000_000) {
@@ -377,6 +433,148 @@ const getMyWins = async (user: AuthUser): Promise<APIGatewayProxyResult> => {
     .filter((item) => item.status === 'sold' && item.winnerSub === user.sub)
     .sort((a, b) => (b.soldAt ?? '').localeCompare(a.soldAt ?? ''));
   return json(200, { items: wins });
+};
+
+// 自分が入札したことのある出品のうち、まだ受付中のものを返す（「入札中」タブ用）
+const getMyActiveBids = async (user: AuthUser): Promise<APIGatewayProxyResult> => {
+  const bidsResult = await doc.send(
+    new QueryCommand({
+      TableName: BIDS_TABLE,
+      IndexName: BIDDER_INDEX,
+      KeyConditionExpression: 'bidderSub = :sub',
+      ExpressionAttributeValues: { ':sub': user.sub },
+    }),
+  );
+  const itemIds = [...new Set(extractItemIds(bidsResult.Items ?? []))];
+  const items = (await batchGetItems(itemIds))
+    .filter((item) => item.status === 'active')
+    .sort((a, b) => a.endTime.localeCompare(b.endTime));
+  return json(200, { items });
+};
+
+const putFavorite = async (itemId: string, user: AuthUser): Promise<APIGatewayProxyResult> => {
+  const itemResult = await doc.send(new GetCommand({ TableName: ITEMS_TABLE, Key: { itemId } }));
+  if (!isLostItem(itemResult.Item)) return json(404, { message: '出品が見つかりません' });
+
+  const favorite: Favorite = { userSub: user.sub, itemId, createdAt: new Date().toISOString() };
+  await doc.send(new PutCommand({ TableName: FAVORITES_TABLE, Item: favorite }));
+  return json(200, { favorited: true });
+};
+
+const deleteFavorite = async (itemId: string, user: AuthUser): Promise<APIGatewayProxyResult> => {
+  await doc.send(
+    new DeleteCommand({ TableName: FAVORITES_TABLE, Key: { userSub: user.sub, itemId } }),
+  );
+  return json(200, { favorited: false });
+};
+
+const getMyFavorites = async (user: AuthUser): Promise<APIGatewayProxyResult> => {
+  const result = await doc.send(
+    new QueryCommand({
+      TableName: FAVORITES_TABLE,
+      KeyConditionExpression: 'userSub = :sub',
+      ExpressionAttributeValues: { ':sub': user.sub },
+    }),
+  );
+  const itemIds = extractItemIds(result.Items ?? []);
+  const items = (await batchGetItems(itemIds)).sort((a, b) => a.endTime.localeCompare(b.endTime));
+  return json(200, { items });
+};
+
+// ---------- 出品元（org）API ----------
+
+const getOrgItems = async (user: AuthUser): Promise<APIGatewayProxyResult> => {
+  if (user.orgId === undefined) {
+    return json(403, { message: 'このアカウントには出品元が紐づいていません' });
+  }
+  const items = await scanAllItems();
+  const mine = items
+    .filter((item) => item.orgId === user.orgId)
+    .sort((a, b) => b.endTime.localeCompare(a.endTime));
+  return json(200, { items: mine });
+};
+
+// 出品元が「受け取り拠点へ現物を納品した」ことを確認する。購入者側の受け取り確認（pickupStatus）とは
+// 独立して管理し、両方が揃った時点でフロントエンドが「受け渡し完了（双方確認済み）」として表示する。
+const orgConfirmHandover = async (
+  itemId: string,
+  user: AuthUser,
+): Promise<APIGatewayProxyResult> => {
+  if (user.orgId === undefined) {
+    return json(403, { message: 'このアカウントには出品元が紐づいていません' });
+  }
+  const itemResult = await doc.send(new GetCommand({ TableName: ITEMS_TABLE, Key: { itemId } }));
+  const item: unknown = itemResult.Item;
+  if (!isLostItem(item)) return json(404, { message: '出品が見つかりません' });
+  if (item.orgId !== user.orgId) {
+    return json(403, { message: 'この出品元が登録した商品ではありません' });
+  }
+  if (item.status !== 'sold') {
+    return json(409, { message: 'まだ落札されていません' });
+  }
+  if (item.orgHandoverAt !== undefined) {
+    return json(409, { message: 'すでに納品済みです' });
+  }
+
+  const now = new Date().toISOString();
+  await doc.send(
+    new UpdateCommand({
+      TableName: ITEMS_TABLE,
+      Key: { itemId },
+      UpdateExpression: 'SET orgHandoverAt = :now',
+      ExpressionAttributeValues: { ':now': now },
+    }),
+  );
+  return json(200, { orgHandoverAt: now });
+};
+
+const getOrgStats = async (user: AuthUser): Promise<APIGatewayProxyResult> => {
+  if (user.orgId === undefined) {
+    return json(403, { message: 'このアカウントには出品元が紐づいていません' });
+  }
+  const items = await scanAllItems();
+  const mine = items.filter((item) => item.orgId === user.orgId);
+  return json(200, computeStats(mine));
+};
+
+const INQUIRY_MESSAGE_MAX_LENGTH = 1000;
+
+const submitOrgInquiry = async (
+  body: string | null,
+  user: AuthUser,
+): Promise<APIGatewayProxyResult> => {
+  if (user.orgId === undefined) {
+    return json(403, { message: 'このアカウントには出品元が紐づいていません' });
+  }
+  const data = parseBody(body);
+  const messageRaw = data?.['message'];
+  if (typeof messageRaw !== 'string' || messageRaw.trim() === '') {
+    return json(400, { message: 'お問い合わせ内容を入力してください' });
+  }
+  if (messageRaw.trim().length > INQUIRY_MESSAGE_MAX_LENGTH) {
+    return json(400, {
+      message: `お問い合わせ内容は${INQUIRY_MESSAGE_MAX_LENGTH}文字以内で入力してください`,
+    });
+  }
+
+  const orgResult = await doc.send(
+    new GetCommand({ TableName: ORGANIZATIONS_TABLE, Key: { orgId: user.orgId } }),
+  );
+  const org: unknown = orgResult.Item;
+  if (!isOrganization(org)) return json(404, { message: '出品元情報が見つかりません' });
+
+  const inquiryId = `inq-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const inquiry: Inquiry = {
+    inquiryId,
+    orgId: user.orgId,
+    orgName: org.name,
+    fromSub: user.sub,
+    message: messageRaw.trim(),
+    status: 'new',
+    createdAt: new Date().toISOString(),
+  };
+  await doc.send(new PutCommand({ TableName: INQUIRIES_TABLE, Item: inquiry }));
+  return json(201, { inquiry });
 };
 
 const generatePickupCode = (): string =>
@@ -657,6 +855,77 @@ const adminCreateOrganization = async (body: string | null): Promise<APIGatewayP
   return json(201, { organization });
 };
 
+// 出品元アカウントのログインを発行する（新規作成時・既存出品元への後付けの両方から利用）。
+// 招待メールは送らず、管理者が控えたメール・初期パスワードを直接共有する運用（seed-data.tsのensureUserと同じ方式）
+const adminProvisionOrgLogin = async (
+  orgId: string,
+  body: string | null,
+): Promise<APIGatewayProxyResult> => {
+  const data = parseBody(body);
+  if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
+  const emailRaw = data['email'];
+  const passwordRaw = data['password'];
+  if (typeof emailRaw !== 'string' || !EMAIL_PATTERN.test(emailRaw.trim())) {
+    return json(400, { message: 'メールアドレスの形式が正しくありません' });
+  }
+  if (typeof passwordRaw !== 'string' || passwordRaw.length < 8) {
+    return json(400, { message: 'パスワードは8文字以上で入力してください' });
+  }
+
+  const orgResult = await doc.send(new GetCommand({ TableName: ORGANIZATIONS_TABLE, Key: { orgId } }));
+  const org: unknown = orgResult.Item;
+  if (!isOrganization(org)) return json(404, { message: '出品元が見つかりません' });
+  if (org.loginSub !== undefined) {
+    return json(409, { message: 'この出品元はすでにログインが発行されています' });
+  }
+
+  const email = emailRaw.trim();
+  let loginSub: string;
+  try {
+    const createResult = await cognitoIdp.send(
+      new AdminCreateUserCommand({
+        UserPoolId: USER_POOL_ID,
+        Username: email,
+        MessageAction: 'SUPPRESS',
+        UserAttributes: [
+          { Name: 'email', Value: email },
+          { Name: 'email_verified', Value: 'true' },
+          { Name: 'nickname', Value: org.name },
+          { Name: 'custom:orgId', Value: orgId },
+        ],
+      }),
+    );
+    const subAttr = createResult.User?.Attributes?.find((a) => a.Name === 'sub')?.Value;
+    if (subAttr === undefined) return json(500, { message: 'アカウント作成に失敗しました' });
+    loginSub = subAttr;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'アカウント作成に失敗しました';
+    return json(409, { message });
+  }
+
+  await cognitoIdp.send(
+    new AdminSetUserPasswordCommand({
+      UserPoolId: USER_POOL_ID,
+      Username: email,
+      Password: passwordRaw,
+      Permanent: true,
+    }),
+  );
+  await cognitoIdp.send(
+    new AdminAddUserToGroupCommand({ UserPoolId: USER_POOL_ID, Username: email, GroupName: 'org' }),
+  );
+  await doc.send(
+    new UpdateCommand({
+      TableName: ORGANIZATIONS_TABLE,
+      Key: { orgId },
+      UpdateExpression: 'SET loginSub = :sub',
+      ExpressionAttributeValues: { ':sub': loginSub },
+    }),
+  );
+
+  return json(201, { loginSub, email });
+};
+
 // ---------- 出品元 申し込み（PartnerApplication）API ----------
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -741,6 +1010,32 @@ const adminReviewPartnerApplication = async (
     new UpdateCommand({
       TableName: PARTNER_APPLICATIONS_TABLE,
       Key: { applicationId },
+      UpdateExpression: 'SET #st = :reviewed',
+      ExpressionAttributeNames: { '#st': 'status' },
+      ExpressionAttributeValues: { ':reviewed': 'reviewed' },
+    }),
+  );
+  return json(200, { status: 'reviewed' });
+};
+
+// ---------- 出品元からの問い合わせ（Inquiry）管理API ----------
+
+const adminListInquiries = async (): Promise<APIGatewayProxyResult> => {
+  const result = await doc.send(new ScanCommand({ TableName: INQUIRIES_TABLE }));
+  const inquiries = (result.Items ?? []).filter(isInquiry);
+  inquiries.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return json(200, { inquiries });
+};
+
+const adminReviewInquiry = async (inquiryId: string): Promise<APIGatewayProxyResult> => {
+  const result = await doc.send(new GetCommand({ TableName: INQUIRIES_TABLE, Key: { inquiryId } }));
+  const inquiry: unknown = result.Item;
+  if (!isInquiry(inquiry)) return json(404, { message: '問い合わせが見つかりません' });
+
+  await doc.send(
+    new UpdateCommand({
+      TableName: INQUIRIES_TABLE,
+      Key: { inquiryId },
       UpdateExpression: 'SET #st = :reviewed',
       ExpressionAttributeNames: { '#st': 'status' },
       ExpressionAttributeValues: { ':reviewed': 'reviewed' },
@@ -1142,6 +1437,11 @@ export const handler = async (
 
     if (segments[0] !== 'api') return json(404, { message: 'Not Found' });
 
+    // 商品詳細のisFavorited等、公開ルートでも「ログイン済みなら」の付加情報を返したいため、
+    // 認証状態はここで一度だけ確定させる（未ログインなら user は null のまま公開ルートも処理される）。
+    const authHeader = event.headers['Authorization'] ?? event.headers['authorization'];
+    const user = await authenticate(authHeader);
+
     // --- 公開 ---
     if (segments[1] === 'config' && segments.length === 2 && method === 'GET') {
       return getConfig();
@@ -1152,14 +1452,12 @@ export const handler = async (
     if (segments[1] === 'items' && segments.length === 3 && method === 'GET') {
       const itemId = segments[2];
       if (itemId === undefined) return json(404, { message: 'Not Found' });
-      return await getItemDetail(decodeURIComponent(itemId));
+      return await getItemDetail(decodeURIComponent(itemId), user);
     }
     if (segments[1] === 'partner-applications' && segments.length === 2 && method === 'POST') {
       return await submitPartnerApplication(event.body);
     }
     // --- ここから認証必須 ---
-    const authHeader = event.headers['Authorization'] ?? event.headers['authorization'];
-    const user = await authenticate(authHeader);
 
     if (
       segments[1] === 'items' &&
@@ -1219,6 +1517,67 @@ export const handler = async (
       return await getMyWins(user);
     }
 
+    if (
+      segments[1] === 'me' &&
+      segments[2] === 'bids' &&
+      segments.length === 3 &&
+      method === 'GET'
+    ) {
+      if (user === null) return json(401, { message: 'ログインが必要です' });
+      return await getMyActiveBids(user);
+    }
+
+    if (
+      segments[1] === 'me' &&
+      segments[2] === 'favorites' &&
+      segments.length === 3 &&
+      method === 'GET'
+    ) {
+      if (user === null) return json(401, { message: 'ログインが必要です' });
+      return await getMyFavorites(user);
+    }
+
+    if (
+      segments[1] === 'items' &&
+      segments.length === 4 &&
+      segments[3] === 'favorite' &&
+      (method === 'POST' || method === 'DELETE')
+    ) {
+      if (user === null) return json(401, { message: 'ログインが必要です' });
+      const itemId = segments[2];
+      if (itemId === undefined) return json(404, { message: 'Not Found' });
+      return method === 'POST'
+        ? await putFavorite(decodeURIComponent(itemId), user)
+        : await deleteFavorite(decodeURIComponent(itemId), user);
+    }
+
+    // --- 出品元（org） ---
+    if (segments[1] === 'org') {
+      if (user === null) return json(401, { message: 'ログインが必要です' });
+      if (!user.isOrg) return json(403, { message: '出品元権限がありません' });
+
+      if (segments[2] === 'items' && segments.length === 3 && method === 'GET') {
+        return await getOrgItems(user);
+      }
+      if (
+        segments[2] === 'items' &&
+        segments.length === 5 &&
+        segments[4] === 'handover' &&
+        method === 'POST'
+      ) {
+        const itemId = segments[3];
+        if (itemId === undefined) return json(404, { message: 'Not Found' });
+        return await orgConfirmHandover(decodeURIComponent(itemId), user);
+      }
+      if (segments[2] === 'stats' && segments.length === 3 && method === 'GET') {
+        return await getOrgStats(user);
+      }
+      if (segments[2] === 'inquiries' && segments.length === 3 && method === 'POST') {
+        return await submitOrgInquiry(event.body, user);
+      }
+      return json(404, { message: 'Not Found' });
+    }
+
     // --- 管理者 ---
     if (segments[1] === 'admin') {
       if (user === null) return json(401, { message: 'ログインが必要です' });
@@ -1240,6 +1599,16 @@ export const handler = async (
         if (method === 'GET') return await adminListOrganizations();
         if (method === 'POST') return await adminCreateOrganization(event.body);
       }
+      if (
+        segments[2] === 'organizations' &&
+        segments.length === 5 &&
+        segments[4] === 'login' &&
+        method === 'POST'
+      ) {
+        const orgId = segments[3];
+        if (orgId === undefined) return json(404, { message: 'Not Found' });
+        return await adminProvisionOrgLogin(decodeURIComponent(orgId), event.body);
+      }
       if (segments[2] === 'partner-applications' && segments.length === 3 && method === 'GET') {
         return await adminListPartnerApplications();
       }
@@ -1252,6 +1621,19 @@ export const handler = async (
         const applicationId = segments[3];
         if (applicationId === undefined) return json(404, { message: 'Not Found' });
         return await adminReviewPartnerApplication(decodeURIComponent(applicationId));
+      }
+      if (segments[2] === 'inquiries' && segments.length === 3 && method === 'GET') {
+        return await adminListInquiries();
+      }
+      if (
+        segments[2] === 'inquiries' &&
+        segments.length === 5 &&
+        segments[4] === 'review' &&
+        method === 'POST'
+      ) {
+        const inquiryId = segments[3];
+        if (inquiryId === undefined) return json(404, { message: 'Not Found' });
+        return await adminReviewInquiry(decodeURIComponent(inquiryId));
       }
       if (segments[2] === 'items' && segments.length === 3 && method === 'POST') {
         return await adminCreateItem(event.body);

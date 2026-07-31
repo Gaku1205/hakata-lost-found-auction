@@ -14,6 +14,8 @@ export type AuthUser = {
   nickname: string;
   email: string;
   isAdmin: boolean;
+  isOrg: boolean;
+  orgId?: string;
 };
 
 /**
@@ -31,12 +33,14 @@ export const authenticate = async (
     const groups: unknown = payload['cognito:groups'];
     const nickname: unknown = payload['nickname'];
     const email: unknown = payload['email'];
+    const orgId: unknown = payload['custom:orgId'];
     return {
       sub: payload.sub,
       nickname: typeof nickname === 'string' && nickname !== '' ? nickname : '利用者',
       email: typeof email === 'string' ? email : '',
-      isAdmin:
-        Array.isArray(groups) && groups.some((g) => g === 'admin'),
+      isAdmin: Array.isArray(groups) && groups.some((g) => g === 'admin'),
+      isOrg: Array.isArray(groups) && groups.some((g) => g === 'org'),
+      orgId: typeof orgId === 'string' && orgId !== '' ? orgId : undefined,
     };
   } catch {
     return null;

@@ -19,6 +19,9 @@ export const ITEMS_TABLE_NAME = 'megurimono-items';
 export const BIDS_TABLE_NAME = 'megurimono-bids';
 export const ORGANIZATIONS_TABLE_NAME = 'megurimono-organizations';
 export const PARTNER_APPLICATIONS_TABLE_NAME = 'megurimono-partner-applications';
+export const FAVORITES_TABLE_NAME = 'megurimono-favorites';
+export const BIDDER_INDEX_NAME = 'BidderIndex';
+export const INQUIRIES_TABLE_NAME = 'megurimono-inquiries';
 
 export class MeguriMonoStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -36,6 +39,29 @@ export class MeguriMonoStack extends cdk.Stack {
       tableName: BIDS_TABLE_NAME,
       partitionKey: { name: 'itemId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'bidId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    // 「自分が入札した出品」を全件Scanなしで引けるようにする逆引きインデックス
+    bidsTable.addGlobalSecondaryIndex({
+      indexName: BIDDER_INDEX_NAME,
+      partitionKey: { name: 'bidderSub', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
+    });
+
+    // お気に入り（買い手が出品をブックマークする）
+    const favoritesTable = new dynamodb.Table(this, 'FavoritesTable', {
+      tableName: FAVORITES_TABLE_NAME,
+      partitionKey: { name: 'userSub', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'itemId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // 出品元アカウントから運営への問い合わせ
+    const inquiriesTable = new dynamodb.Table(this, 'InquiriesTable', {
+      tableName: INQUIRIES_TABLE_NAME,
+      partitionKey: { name: 'inquiryId', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
@@ -65,6 +91,10 @@ export class MeguriMonoStack extends cdk.Stack {
       standardAttributes: {
         nickname: { required: true, mutable: true },
       },
+      // 出品元(org)アカウントが自分のorgIdを名乗るためのカスタム属性
+      customAttributes: {
+        orgId: new cognito.StringAttribute({ mutable: true }),
+      },
       passwordPolicy: {
         minLength: 8,
         requireLowercase: true,
@@ -91,6 +121,12 @@ export class MeguriMonoStack extends cdk.Stack {
       description: 'めぐりモノ 管理者（出品管理・受け渡し処理）',
     });
 
+    new cognito.CfnUserPoolGroup(this, 'OrgGroup', {
+      userPoolId: userPool.userPoolId,
+      groupName: 'org',
+      description: 'めぐりモノ 出品元（警察・自治体／企業）アカウント',
+    });
+
     // ---------- API（Lambda + API Gateway） ----------
     const apiFn = new lambdaNodejs.NodejsFunction(this, 'ApiFn', {
       entry: path.join(__dirname, '..', 'lambda', 'api.ts'),
@@ -102,8 +138,11 @@ export class MeguriMonoStack extends cdk.Stack {
       environment: {
         ITEMS_TABLE: itemsTable.tableName,
         BIDS_TABLE: bidsTable.tableName,
+        BIDDER_INDEX: BIDDER_INDEX_NAME,
         ORGANIZATIONS_TABLE: organizationsTable.tableName,
         PARTNER_APPLICATIONS_TABLE: partnerApplicationsTable.tableName,
+        FAVORITES_TABLE: favoritesTable.tableName,
+        INQUIRIES_TABLE: inquiriesTable.tableName,
         USER_POOL_ID: userPool.userPoolId,
         USER_POOL_CLIENT_ID: userPoolClient.userPoolClientId,
       },
@@ -116,10 +155,23 @@ export class MeguriMonoStack extends cdk.Stack {
     bidsTable.grantReadWriteData(apiFn);
     organizationsTable.grantReadWriteData(apiFn);
     partnerApplicationsTable.grantReadWriteData(apiFn);
+    favoritesTable.grantReadWriteData(apiFn);
+    inquiriesTable.grantReadWriteData(apiFn);
     apiFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['cloudformation:DescribeStacks', 'cloudformation:DescribeStackResources', 'cloudformation:DescribeStackEvents'],
         resources: ['*'],
+      }),
+    );
+    // 管理者が出品元(org)アカウントのログインを発行するために必要
+    apiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          'cognito-idp:AdminCreateUser',
+          'cognito-idp:AdminSetUserPassword',
+          'cognito-idp:AdminAddUserToGroup',
+        ],
+        resources: [userPool.userPoolArn],
       }),
     );
 

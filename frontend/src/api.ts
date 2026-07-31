@@ -5,6 +5,7 @@ import type {
   Bid,
   BidMonitor,
   BidderSummary,
+  Inquiry,
   LostItem,
   MonitorBid,
   Organization,
@@ -70,7 +71,8 @@ const isAuthConfig = (value: unknown): value is AuthConfig =>
   typeof value.region === 'string';
 
 type ItemsResponse = { items: LostItem[] };
-type ItemDetailResponse = { item: LostItem; bids: Bid[] };
+type ItemDetailResponse = { item: LostItem; bids: Bid[]; isFavorited: boolean };
+type FavoriteResponse = { favorited: boolean };
 type BidResponse = { currentPrice: number; bid: Bid; extended?: boolean; endTime?: string };
 type ItemResponse = { item: LostItem };
 type PickupReservationResponse = {
@@ -94,7 +96,11 @@ const isItemDetailResponse = (value: unknown): value is ItemDetailResponse =>
   isRecord(value) &&
   isLostItem(value.item) &&
   Array.isArray(value.bids) &&
-  value.bids.every(isBid);
+  value.bids.every(isBid) &&
+  typeof value.isFavorited === 'boolean';
+
+const isFavoriteResponse = (value: unknown): value is FavoriteResponse =>
+  isRecord(value) && typeof value.favorited === 'boolean';
 
 const isBidResponse = (value: unknown): value is BidResponse =>
   isRecord(value) && typeof value.currentPrice === 'number' && isBid(value.bid);
@@ -179,6 +185,32 @@ const isPartnerApplicationResponse = (value: unknown): value is PartnerApplicati
 const isPartnerApplicationReviewResponse = (value: unknown): value is PartnerApplicationReviewResponse =>
   isRecord(value) && value.status === 'reviewed';
 
+const isInquiry = (value: unknown): value is Inquiry =>
+  isRecord(value) &&
+  typeof value.inquiryId === 'string' &&
+  typeof value.orgId === 'string' &&
+  typeof value.orgName === 'string' &&
+  typeof value.message === 'string' &&
+  (value.status === 'new' || value.status === 'reviewed') &&
+  typeof value.createdAt === 'string';
+
+type InquiriesResponse = { inquiries: Inquiry[] };
+type InquiryResponse = { inquiry: Inquiry };
+type InquiryReviewResponse = { status: 'reviewed' };
+type OrgLoginResponse = { loginSub: string; email: string };
+
+const isInquiriesResponse = (value: unknown): value is InquiriesResponse =>
+  isRecord(value) && Array.isArray(value.inquiries) && value.inquiries.every(isInquiry);
+
+const isInquiryResponse = (value: unknown): value is InquiryResponse =>
+  isRecord(value) && isInquiry(value.inquiry);
+
+const isInquiryReviewResponse = (value: unknown): value is InquiryReviewResponse =>
+  isRecord(value) && value.status === 'reviewed';
+
+const isOrgLoginResponse = (value: unknown): value is OrgLoginResponse =>
+  isRecord(value) && typeof value.loginSub === 'string' && typeof value.email === 'string';
+
 const isAnything = (_value: unknown): _value is unknown => true;
 
 const hasMessage = (value: unknown): value is { message: string } =>
@@ -259,6 +291,43 @@ export const postBid = (itemId: string, amount: number): Promise<BidResponse> =>
 
 export const fetchMyWins = (): Promise<ItemsResponse> =>
   request('/api/me/wins', isItemsResponse);
+
+export const fetchMyActiveBids = (): Promise<ItemsResponse> =>
+  request('/api/me/bids', isItemsResponse);
+
+export const fetchMyFavorites = (): Promise<ItemsResponse> =>
+  request('/api/me/favorites', isItemsResponse);
+
+export const postFavorite = (itemId: string): Promise<FavoriteResponse> =>
+  request(`/api/items/${encodeURIComponent(itemId)}/favorite`, isFavoriteResponse, {
+    method: 'POST',
+  });
+
+export const deleteFavorite = (itemId: string): Promise<FavoriteResponse> =>
+  request(`/api/items/${encodeURIComponent(itemId)}/favorite`, isFavoriteResponse, {
+    method: 'DELETE',
+  });
+
+// ---------- 出品元（org） ----------
+
+export const fetchOrgItems = (): Promise<ItemsResponse> => request('/api/org/items', isItemsResponse);
+
+export const fetchOrgStats = (): Promise<Stats> => request('/api/org/stats', isStats);
+
+export const postOrgInquiry = (message: string): Promise<InquiryResponse> =>
+  request('/api/org/inquiries', isInquiryResponse, jsonInit('POST', { message }));
+
+type OrgHandoverResponse = { orgHandoverAt: string };
+
+const isOrgHandoverResponse = (value: unknown): value is OrgHandoverResponse =>
+  isRecord(value) && typeof value.orgHandoverAt === 'string';
+
+export const postOrgHandover = (itemId: string): Promise<OrgHandoverResponse> =>
+  request(
+    `/api/org/items/${encodeURIComponent(itemId)}/handover`,
+    isOrgHandoverResponse,
+    { method: 'POST' },
+  );
 
 // ダミー決済（実際の課金は発生しない）
 export const postPayment = (itemId: string): Promise<PaymentResponse> =>
@@ -357,6 +426,27 @@ export const adminReviewPartnerApplication = (
     `/api/admin/partner-applications/${encodeURIComponent(applicationId)}/review`,
     isPartnerApplicationReviewResponse,
     { method: 'POST' },
+  );
+
+export const adminListInquiries = (): Promise<InquiriesResponse> =>
+  request('/api/admin/inquiries', isInquiriesResponse);
+
+export const adminReviewInquiry = (inquiryId: string): Promise<InquiryReviewResponse> =>
+  request(
+    `/api/admin/inquiries/${encodeURIComponent(inquiryId)}/review`,
+    isInquiryReviewResponse,
+    { method: 'POST' },
+  );
+
+export const adminProvisionOrgLogin = (
+  orgId: string,
+  email: string,
+  password: string,
+): Promise<OrgLoginResponse> =>
+  request(
+    `/api/admin/organizations/${encodeURIComponent(orgId)}/login`,
+    isOrgLoginResponse,
+    jsonInit('POST', { email, password }),
   );
 
 type CloudFormationInfo = {

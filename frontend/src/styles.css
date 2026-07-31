@@ -702,6 +702,14 @@ button {
   color: var(--c-closed-ink);
 }
 
+.detail__title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .detail__title {
   font-family: var(--font-serif);
   font-size: clamp(22px, 3.4vw, 30px);
@@ -712,6 +720,40 @@ button {
 
 .detail__description {
   color: var(--c-sub);
+}
+
+.favorite-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  min-height: 44px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-pill);
+  background: var(--c-surface);
+  color: var(--c-sub);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 180ms ease-out, border-color 180ms ease-out, color 180ms ease-out;
+}
+
+.favorite-toggle:hover {
+  border-color: var(--c-amber);
+  color: var(--c-amber-strong);
+}
+
+.favorite-toggle:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.favorite-toggle--active {
+  background: var(--c-amber-soft);
+  border-color: var(--c-amber);
+  color: var(--c-amber-strong);
 }
 
 .meta {
@@ -1484,6 +1526,46 @@ button {
   margin-top: 2px;
 }
 
+/* ---------- マイページ（タブ・お気に入り） ---------- */
+.mypage-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.mypage-tabs__tab {
+  padding: 10px 18px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-pill);
+  background: var(--c-surface);
+  color: var(--c-ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 180ms ease-out, border-color 180ms ease-out;
+}
+
+.mypage-tabs__tab:hover {
+  border-color: var(--c-indigo);
+}
+
+.mypage-tabs__tab.active {
+  background: var(--c-indigo);
+  border-color: var(--c-indigo);
+  color: #fff;
+  font-weight: 700;
+}
+
+.favorite-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 /* ---------- マイページ（受取フロー） ---------- */
 .win-list {
   display: flex;
@@ -1754,6 +1836,22 @@ button {
 
 .pickup-verify input {
   width: 110px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.org-login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 200px;
+}
+
+.org-login-form input {
   min-height: 36px;
   padding: 6px 10px;
   border: 1px solid var(--c-border);
@@ -2512,6 +2610,16 @@ button {
 }
 
 .status-chip--reviewed {
+  background: var(--c-green-soft);
+  color: var(--c-green);
+}
+
+.status-chip--pending {
+  background: var(--c-amber-soft);
+  color: var(--c-amber-strong);
+}
+
+.status-chip--done {
   background: var(--c-green-soft);
   color: var(--c-green);
 }

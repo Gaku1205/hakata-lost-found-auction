@@ -1,12 +1,62 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { ApiError, fetchItemDetail, postBid } from '../api';
+import { ApiError, deleteFavorite, fetchItemDetail, postBid, postFavorite } from '../api';
 import { useAuth } from '../auth/AuthContext';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { formatDate, formatFoundMonth, relativeTime, timeLeft, yen } from '../format';
 import { useLoadable, useNow } from '../hooks';
 import type { Bid, LostItem } from '../types';
 import { CATEGORY_LABELS, CONDITION_LABELS, ORG_TYPE_LABELS } from '../types';
+
+const StarIcon = ({ filled }: { filled: boolean }): JSX.Element => (
+  <svg
+    width="18"
+    height="18"
+    viewBox="0 0 24 24"
+    fill={filled ? 'currentColor' : 'none'}
+    stroke="currentColor"
+    strokeWidth="1.6"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M12 3.5l2.6 5.6 6 .7-4.4 4.1 1.2 6-5.4-3-5.4 3 1.2-6-4.4-4.1 6-.7Z" />
+  </svg>
+);
+
+type FavoriteButtonProps = {
+  itemId: string;
+  isFavorited: boolean;
+  onChange: (next: boolean) => void;
+};
+
+const FavoriteButton = ({ itemId, isFavorited, onChange }: FavoriteButtonProps): JSX.Element => {
+  const [pending, setPending] = useState(false);
+
+  const handleClick = (): void => {
+    setPending(true);
+    const call = isFavorited ? deleteFavorite(itemId) : postFavorite(itemId);
+    call
+      .then((result) => onChange(result.favorited))
+      .catch(() => {
+        // 失敗時は状態を変更せず、そのまま再試行できるようにする
+      })
+      .finally(() => setPending(false));
+  };
+
+  return (
+    <button
+      type="button"
+      className={`favorite-toggle${isFavorited ? ' favorite-toggle--active' : ''}`}
+      onClick={handleClick}
+      disabled={pending}
+      aria-pressed={isFavorited}
+    >
+      <StarIcon filled={isFavorited} />
+      {isFavorited ? 'お気に入り済み' : 'お気に入りに追加'}
+    </button>
+  );
+};
 
 type BidFormProps = {
   item: LostItem;
@@ -36,6 +86,17 @@ const BidForm = ({ item, currentPrice, onBidPlaced }: BidFormProps): JSX.Element
         >
           ログインして入札する
         </Link>
+      </div>
+    );
+  }
+
+  if (state.user.isOrg) {
+    return (
+      <div className="bid-login-cta">
+        <h2 className="panel__heading">入札する</h2>
+        <p className="bid-login-cta__text">
+          出品元アカウントは入札できません。一般のお客様のログインでご利用ください。
+        </p>
       </div>
     );
   }
@@ -141,6 +202,11 @@ export const ItemDetail = (): JSX.Element => {
   const [localPrice, setLocalPrice] = useState<number | null>(null);
   const [localBidCount, setLocalBidCount] = useState(0);
   const [localEndTime, setLocalEndTime] = useState<string | null>(null);
+  const [isFavorited, setIsFavorited] = useState(false);
+
+  useEffect(() => {
+    if (result.state === 'ready') setIsFavorited(result.data.isFavorited);
+  }, [result]);
 
   if (result.state === 'loading') {
     return (
@@ -215,7 +281,16 @@ export const ItemDetail = (): JSX.Element => {
           <span className={`condition-chip condition-chip--${item.conditionRank}`}>
             {CONDITION_LABELS[item.conditionRank]}
           </span>
-          <h1 className="detail__title">{item.title}</h1>
+          <div className="detail__title-row">
+            <h1 className="detail__title">{item.title}</h1>
+            {authState.status === 'authed' ? (
+              <FavoriteButton
+                itemId={item.itemId}
+                isFavorited={isFavorited}
+                onChange={setIsFavorited}
+              />
+            ) : null}
+          </div>
           <p className="detail__description">{item.description}</p>
 
           <dl className="meta">

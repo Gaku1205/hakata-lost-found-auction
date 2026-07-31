@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
-import { RequireAdmin, RequireAuth } from './components/RequireAdmin';
+import { RequireAdmin, RequireAuth, RequireOrg } from './components/RequireAdmin';
 import { AdminCloudFormation } from './pages/admin/AdminCloudFormation';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
+import { AdminInquiries } from './pages/admin/AdminInquiries';
 import { AdminItemForm } from './pages/admin/AdminItemForm';
 import { AdminItems } from './pages/admin/AdminItems';
 import { AdminOrganizations } from './pages/admin/AdminOrganizations';
@@ -14,6 +15,9 @@ import { ItemDetail } from './pages/ItemDetail';
 import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
 import { MyPage } from './pages/MyPage';
+import { OrgContact } from './pages/org/OrgContact';
+import { OrgItems } from './pages/org/OrgItems';
+import { OrgRevenue } from './pages/org/OrgRevenue';
 import { PartnerApply } from './pages/PartnerApply';
 import { SignUp } from './pages/SignUp';
 
@@ -103,6 +107,7 @@ const Header = (): JSX.Element => {
   const [menuOpen, setMenuOpen] = useState(false);
   const isAuthed = state.status === 'authed';
   const isAdmin = isAuthed && state.user.isAdmin;
+  const isOrg = isAuthed && state.user.isOrg;
 
   // ページ遷移でドロワーを閉じる
   useEffect(() => {
@@ -153,9 +158,14 @@ const Header = (): JSX.Element => {
             <NavLink to="/partners/apply" className="site-nav__link">
               企業の方へ
             </NavLink>
-            {isAuthed ? (
+            {isAuthed && !isOrg ? (
               <NavLink to="/mypage" className="site-nav__link">
                 マイページ
+              </NavLink>
+            ) : null}
+            {isOrg ? (
+              <NavLink to="/org" className="site-nav__link site-nav__link--admin">
+                出品元管理画面
               </NavLink>
             ) : null}
             {isAdmin ? (
@@ -194,6 +204,30 @@ export const App = (): JSX.Element => (
             <RequireAuth>
               <MyPage />
             </RequireAuth>
+          }
+        />
+        <Route
+          path="/org"
+          element={
+            <RequireOrg>
+              <OrgItems />
+            </RequireOrg>
+          }
+        />
+        <Route
+          path="/org/revenue"
+          element={
+            <RequireOrg>
+              <OrgRevenue />
+            </RequireOrg>
+          }
+        />
+        <Route
+          path="/org/contact"
+          element={
+            <RequireOrg>
+              <OrgContact />
+            </RequireOrg>
           }
         />
         <Route
@@ -241,6 +275,14 @@ export const App = (): JSX.Element => (
           element={
             <RequireAdmin>
               <AdminCloudFormation />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="/admin/inquiries"
+          element={
+            <RequireAdmin>
+              <AdminInquiries />
             </RequireAdmin>
           }
         />

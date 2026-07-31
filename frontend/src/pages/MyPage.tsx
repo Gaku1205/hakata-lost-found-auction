@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import QRCode from 'qrcode';
 import {
   ApiError,
+  deleteFavorite,
+  fetchMyActiveBids,
+  fetchMyFavorites,
   fetchMyWins,
   postPayment,
   postPickupReservation,
@@ -10,8 +13,9 @@ import {
 } from '../api';
 import { useAuth } from '../auth/AuthContext';
 import { CategoryIcon } from '../components/CategoryIcon';
+import { ItemCard } from '../components/ItemCard';
 import { yen } from '../format';
-import { useLoadable } from '../hooks';
+import { useLoadable, useNow, type Loadable } from '../hooks';
 import type { LostItem } from '../types';
 
 const dayOf = (iso: string | undefined): string => (iso ?? '').slice(0, 10);
@@ -63,7 +67,7 @@ const PaymentPanel = ({
     event.preventDefault();
     setError(null);
     if (cardNumber.trim() === '' || expiry.trim() === '' || cvv.trim() === '') {
-      setError('カード情報を入力してください（デモのため実在のカードは不要です）');
+      setError('カード情報を入力してください(デモのため実在のカードは不要です)');
       return;
     }
     setSubmitting(true);
@@ -245,7 +249,7 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
               onClick={handleUnlock}
               disabled={unlocking}
             >
-              {unlocking ? '解錠中…' : 'ボックスを解錠する（受け取り完了）'}
+              {unlocking ? '解錠中…' : 'ボックスを解錠する(受け取り完了)'}
             </button>
           </div>
         ) : (
@@ -277,37 +281,151 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
   );
 };
 
+const FavoriteCard = ({
+  item,
+  nowMs,
+  index,
+  onRemove,
+}: {
+  item: LostItem;
+  nowMs: number;
+  index: number;
+  onRemove: (itemId: string) => void;
+}): JSX.Element => (
+  <div className="favorite-tile">
+    <ItemCard item={item} nowMs={nowMs} index={index} />
+    <button
+      type="button"
+      className="btn btn--ghost btn--fit"
+      onClick={() => onRemove(item.itemId)}
+    >
+      お気に入り解除
+    </button>
+  </div>
+);
+
+type ItemsPanelProps = {
+  result: Loadable<{ items: LostItem[] }>;
+  emptyText: string;
+  onReload: () => void;
+  renderCard: (item: LostItem, index: number) => JSX.Element;
+};
+
+const ItemsPanel = ({ result, emptyText, onReload, renderCard }: ItemsPanelProps): JSX.Element => {
+  if (result.state === 'loading') {
+    return (
+      <div className="grid" aria-busy="true">
+        {Array.from({ length: 2 }, (_, i) => (
+          <div key={i} className="tile tile--skeleton" aria-hidden="true" />
+        ))}
+      </div>
+    );
+  }
+  if (result.state === 'error') {
+    return (
+      <div className="notice notice--error" role="alert">
+        <p>{result.message}</p>
+        <button type="button" className="btn btn--ghost" onClick={onReload}>
+          再読み込み
+        </button>
+      </div>
+    );
+  }
+  if (result.data.items.length === 0) {
+    return (
+      <div className="notice">
+        <p>{emptyText}</p>
+        <Link className="btn btn--ghost" to="/items">
+          出品一覧を見る
+        </Link>
+      </div>
+    );
+  }
+  return (
+    <div className="grid">{result.data.items.map((item, index) => renderCard(item, index))}</div>
+  );
+};
+
+type MyPageTab = 'bidding' | 'wins' | 'favorites';
+
+const isMyPageTab = (value: string | null): value is MyPageTab =>
+  value === 'bidding' || value === 'wins' || value === 'favorites';
+
+const TABS: readonly { value: MyPageTab; label: string }[] = [
+  { value: 'bidding', label: '入札中' },
+  { value: 'wins', label: '購入済み' },
+  { value: 'favorites', label: 'お気に入り' },
+];
+
 export const MyPage = (): JSX.Element => {
   const { state } = useAuth();
-  const [result, reload] = useLoadable(fetchMyWins, []);
+  const nowMs = useNow();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: MyPageTab = isMyPageTab(searchParams.get('tab')) ? (searchParams.get('tab') as MyPageTab) : 'bidding';
+
+  const [bidsResult, reloadBids] = useLoadable(fetchMyActiveBids, []);
+  const [winsResult, reloadWins] = useLoadable(fetchMyWins, []);
+  const [favoritesResult, reloadFavorites] = useLoadable(fetchMyFavorites, []);
+
   const nickname = state.status === 'authed' ? state.user.nickname : '';
+
+  const handleRemoveFavorite = (itemId: string): void => {
+    deleteFavorite(itemId)
+      .then(() => reloadFavorites())
+      .catch(() => {
+        // 失敗時は静かに諦める。再読み込み時に実際の状態と再同期される
+      });
+  };
+
+  const setTab = (next: MyPageTab): void => {
+    setSearchParams(next === 'bidding' ? {} : { tab: next });
+  };
 
   return (
     <div className="container section">
       <h1 className="page-title">マイページ</h1>
-      <p className="page-lead">
-        {nickname} さんの落札した品物と受取手続きの状況です。
-      </p>
+      <p className="page-lead">{nickname} さんの入札・購入状況です。</p>
 
-      {result.state === 'loading' ? (
-        <div className="tiles" aria-busy="true">
-          {Array.from({ length: 2 }, (_, i) => (
-            <div key={i} className="tile tile--skeleton" aria-hidden="true" />
-          ))}
-        </div>
-      ) : null}
-
-      {result.state === 'error' ? (
-        <div className="notice notice--error" role="alert">
-          <p>{result.message}</p>
-          <button type="button" className="btn btn--ghost" onClick={reload}>
-            再読み込み
+      <nav className="mypage-tabs" aria-label="マイページの表示切り替え">
+        {TABS.map((t) => (
+          <button
+            key={t.value}
+            type="button"
+            className={`mypage-tabs__tab${tab === t.value ? ' active' : ''}`}
+            aria-current={tab === t.value ? 'page' : undefined}
+            onClick={() => setTab(t.value)}
+          >
+            {t.label}
           </button>
-        </div>
+        ))}
+      </nav>
+
+      {tab === 'bidding' ? (
+        <ItemsPanel
+          result={bidsResult}
+          emptyText="現在入札中の出品はありません。"
+          onReload={reloadBids}
+          renderCard={(item, index) => (
+            <ItemCard key={item.itemId} item={item} nowMs={nowMs} index={index} />
+          )}
+        />
       ) : null}
 
-      {result.state === 'ready' ? (
-        result.data.items.length === 0 ? (
+      {tab === 'wins' ? (
+        winsResult.state === 'loading' ? (
+          <div className="tiles" aria-busy="true">
+            {Array.from({ length: 2 }, (_, i) => (
+              <div key={i} className="tile tile--skeleton" aria-hidden="true" />
+            ))}
+          </div>
+        ) : winsResult.state === 'error' ? (
+          <div className="notice notice--error" role="alert">
+            <p>{winsResult.message}</p>
+            <button type="button" className="btn btn--ghost" onClick={reloadWins}>
+              再読み込み
+            </button>
+          </div>
+        ) : winsResult.data.items.length === 0 ? (
           <div className="notice">
             <p>まだ落札した品物はありません。</p>
             <Link className="btn btn--ghost" to="/items">
@@ -316,11 +434,28 @@ export const MyPage = (): JSX.Element => {
           </div>
         ) : (
           <div className="win-list">
-            {result.data.items.map((item) => (
+            {winsResult.data.items.map((item) => (
               <WinCard key={item.itemId} item={item} />
             ))}
           </div>
         )
+      ) : null}
+
+      {tab === 'favorites' ? (
+        <ItemsPanel
+          result={favoritesResult}
+          emptyText="お気に入り登録した出品はありません。"
+          onReload={reloadFavorites}
+          renderCard={(item, index) => (
+            <FavoriteCard
+              key={item.itemId}
+              item={item}
+              nowMs={nowMs}
+              index={index}
+              onRemove={handleRemoveFavorite}
+            />
+          )}
+        />
       ) : null}
     </div>
   );

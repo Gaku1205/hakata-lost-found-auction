@@ -48,3 +48,29 @@ export const RequireAdmin = ({ children }: { children: JSX.Element }): JSX.Eleme
   }
   return children;
 };
+
+export const RequireOrg = ({ children }: { children: JSX.Element }): JSX.Element => {
+  const { state } = useAuth();
+  const location = useLocation();
+  if (state.status === 'loading') return <LoadingPane />;
+  if (state.status === 'anon') {
+    return (
+      <Navigate
+        to="/login"
+        state={{ returnTo: `${location.pathname}${location.search}` }}
+        replace
+      />
+    );
+  }
+  if (!state.user.isOrg) {
+    return (
+      <div className="container section">
+        <h1 className="page-title">出品元権限がありません</h1>
+        <p className="page-lead">
+          このページは出品元（警察・自治体／企業）アカウント専用です。一般アカウントではアクセスできません。
+        </p>
+      </div>
+    );
+  }
+  return children;
+};

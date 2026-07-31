@@ -16,6 +16,8 @@ import {
 import type {
   Bid,
   ConditionRank,
+  Favorite,
+  Inquiry,
   ItemCategory,
   ItemStatus,
   LostItem,
@@ -29,6 +31,8 @@ const ITEMS_TABLE = 'megurimono-items';
 const BIDS_TABLE = 'megurimono-bids';
 const ORGANIZATIONS_TABLE = 'megurimono-organizations';
 const PARTNER_APPLICATIONS_TABLE = 'megurimono-partner-applications';
+const FAVORITES_TABLE = 'megurimono-favorites';
+const INQUIRIES_TABLE = 'megurimono-inquiries';
 const REGION = 'ap-northeast-1';
 const STACK_NAME = 'MeguriMonoStack';
 
@@ -41,6 +45,13 @@ const ADMIN_USER = {
   email: 'admin@example.com',
   password: 'REDACTED_ADMIN_PASSWORD',
   nickname: '運営局',
+};
+// 出品元（商業施設）アカウントのデモ。JR博多シティ（org-jr-hakata）に紐づける
+const ORG_USER = {
+  email: 'org@example.com',
+  password: 'REDACTED_ORG_PASSWORD',
+  nickname: 'JR博多シティ',
+  orgId: 'org-jr-hakata',
 };
 
 const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }), {
@@ -102,6 +113,7 @@ const ensureUser = async (
   userPoolId: string,
   user: SeedUser,
   group?: string,
+  orgId?: string,
 ): Promise<string> => {
   const getSub = (attributes: { Name?: string; Value?: string }[] | undefined): string => {
     const sub = attributes?.find((a) => a.Name === 'sub')?.Value;
@@ -127,6 +139,7 @@ const ensureUser = async (
         { Name: 'email', Value: user.email },
         { Name: 'email_verified', Value: 'true' },
         { Name: 'nickname', Value: user.nickname },
+        ...(orgId !== undefined ? [{ Name: 'custom:orgId', Value: orgId }] : []),
       ],
     }),
   );
@@ -235,6 +248,33 @@ const PARTNER_APPLICATIONS: readonly PartnerApplication[] = [
   },
 ];
 
+// ---------- 出品元からの問い合わせ（デモ表示用） ----------
+
+const INQUIRIES: readonly Inquiry[] = [
+  {
+    inquiryId: 'inq-demo-001',
+    orgId: 'org-jr-hakata',
+    orgName: 'JR博多シティ',
+    fromSub: 'seed-org-jr-hakata',
+    message: '出品可能な物品の点数に上限はありますか？月末にまとめて登録したい物品があります。',
+    status: 'new',
+    createdAt: at(-3 * DAYS),
+  },
+  {
+    inquiryId: 'inq-demo-002',
+    orgId: 'org-jr-hakata',
+    orgName: 'JR博多シティ',
+    fromSub: 'seed-org-jr-hakata',
+    message: '受取拠点を博多駅構内にも追加することは可能でしょうか。',
+    status: 'reviewed',
+    createdAt: at(-14 * DAYS),
+  },
+];
+
+// ---------- お気に入り（デモ表示用） ----------
+
+const FAVORITE_ITEM_IDS = ['i-002', 'i-005'] as const;
+
 const orgById = new Map(ORGANIZATIONS.map((org) => [org.orgId, org]));
 
 type SeedDef = {
@@ -254,6 +294,8 @@ type SeedDef = {
   pickupDate?: string;
   pickupCode?: string;
   pickupBoxNumber?: number;
+  // 出品元が受け取り拠点への納品を確認済みかどうか（購入者側のpickupStatusとは独立したデモ用フラグ）
+  orgHandoverConfirmed?: boolean;
   conditionRank: ConditionRank;
   quantity: number;
   foundDate: string;
@@ -533,6 +575,7 @@ const SEEDS: readonly SeedDef[] = [
     endOffsetMs: -7 * DAYS,
     paymentStatus: 'paid',
     pickupStatus: 'completed',
+    orgHandoverConfirmed: true,
     pickupDate: new Date(now - 2 * DAYS).toISOString().slice(0, 10),
     pickupCode: '551208',
     pickupBoxNumber: generateBoxNumber('i-014'),
@@ -839,6 +882,7 @@ const SEEDS: readonly SeedDef[] = [
     endOffsetMs: -4 * DAYS,
     paymentStatus: 'paid',
     pickupStatus: 'completed',
+    orgHandoverConfirmed: true,
     pickupDate: new Date(now - 1 * DAYS).toISOString().slice(0, 10),
     pickupCode: '204577',
     pickupBoxNumber: generateBoxNumber('i-030'),
@@ -1124,6 +1168,7 @@ const SEEDS: readonly SeedDef[] = [
     endOffsetMs: -2 * DAYS,
     paymentStatus: 'paid',
     pickupStatus: 'reserved',
+    orgHandoverConfirmed: true,
     pickupDate: new Date(now + 3 * DAYS).toISOString().slice(0, 10),
     pickupCode: '719045',
     pickupBoxNumber: generateBoxNumber('i-045'),
@@ -1537,6 +1582,7 @@ const buildItems = (
       pickupCode: seed.pickupCode,
       pickupBoxNumber: seed.pickupBoxNumber,
       pickupDeadline: at(seed.endOffsetMs + 14 * DAYS),
+      orgHandoverAt: seed.orgHandoverConfirmed === true ? at(seed.endOffsetMs + 1 * DAYS) : undefined,
     };
   });
 
@@ -1651,24 +1697,37 @@ const main = async (): Promise<void> => {
   const userPoolId = await getUserPoolId();
   const demoUserSub = await ensureUser(userPoolId, DEMO_USER);
   const adminUserSub = await ensureUser(userPoolId, ADMIN_USER, 'admin');
-  console.log(`Users ready: demo=${demoUserSub} admin=${adminUserSub}`);
+  const orgUserSub = await ensureUser(userPoolId, ORG_USER, 'org', ORG_USER.orgId);
+  console.log(`Users ready: demo=${demoUserSub} admin=${adminUserSub} org=${orgUserSub}`);
 
   const purgedBids = await purgeTable(BIDS_TABLE, ['itemId', 'bidId']);
   const purgedItems = await purgeTable(ITEMS_TABLE, ['itemId']);
   const purgedOrgs = await purgeTable(ORGANIZATIONS_TABLE, ['orgId']);
   const purgedApplications = await purgeTable(PARTNER_APPLICATIONS_TABLE, ['applicationId']);
+  const purgedFavorites = await purgeTable(FAVORITES_TABLE, ['userSub', 'itemId']);
+  const purgedInquiries = await purgeTable(INQUIRIES_TABLE, ['inquiryId']);
   console.log(
-    `Purged ${purgedItems} items, ${purgedBids} bids, ${purgedOrgs} organizations, and ${purgedApplications} partner applications.`,
+    `Purged ${purgedItems} items, ${purgedBids} bids, ${purgedOrgs} organizations, ${purgedApplications} partner applications, ${purgedFavorites} favorites, and ${purgedInquiries} inquiries.`,
   );
 
-  await batchWrite(ORGANIZATIONS_TABLE, ORGANIZATIONS);
+  const organizations = ORGANIZATIONS.map((org) =>
+    org.orgId === ORG_USER.orgId ? { ...org, loginSub: orgUserSub } : org,
+  );
+  await batchWrite(ORGANIZATIONS_TABLE, organizations);
   await batchWrite(PARTNER_APPLICATIONS_TABLE, PARTNER_APPLICATIONS);
+  await batchWrite(INQUIRIES_TABLE, INQUIRIES);
   const bids = buildBids(demoUserSub);
   const items = buildItems(demoUserSub, topBidderMapOf(bids));
   await batchWrite(ITEMS_TABLE, items);
   await batchWrite(BIDS_TABLE, bids);
+  const favorites: Favorite[] = FAVORITE_ITEM_IDS.map((itemId) => ({
+    userSub: demoUserSub,
+    itemId,
+    createdAt: at(-1 * DAYS),
+  }));
+  await batchWrite(FAVORITES_TABLE, favorites);
   console.log(
-    `Seeded ${ORGANIZATIONS.length} organizations, ${PARTNER_APPLICATIONS.length} partner applications, ${items.length} items, and ${bids.length} bids.`,
+    `Seeded ${organizations.length} organizations, ${PARTNER_APPLICATIONS.length} partner applications, ${items.length} items, ${bids.length} bids, ${favorites.length} favorites, and ${INQUIRIES.length} inquiries.`,
   );
 };
 

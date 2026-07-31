@@ -34,6 +34,7 @@ export type Organization = {
   type: OrgType;
   contactNote?: string;
   createdAt: string;
+  loginSub?: string;
 };
 
 export type AdminOrgInput = {
@@ -113,6 +114,7 @@ export type LostItem = {
   pickupCode?: string;
   pickupDeadline?: string;
   pickupBoxNumber?: number;
+  orgHandoverAt?: string;
 };
 
 export type Bid = {
@@ -244,6 +246,23 @@ export const PICKUP_STATUS_LABELS: Record<PickupStatus, string> = {
 };
 
 export const PARTNER_APPLICATION_STATUS_LABELS: Record<PartnerApplicationStatus, string> = {
+  new: '未確認',
+  reviewed: '確認済み',
+};
+
+export type InquiryStatus = 'new' | 'reviewed';
+
+export type Inquiry = {
+  inquiryId: string;
+  orgId: string;
+  orgName: string;
+  fromSub: string;
+  message: string;
+  status: InquiryStatus;
+  createdAt: string;
+};
+
+export const INQUIRY_STATUS_LABELS: Record<InquiryStatus, string> = {
   new: '未確認',
   reviewed: '確認済み',
 };

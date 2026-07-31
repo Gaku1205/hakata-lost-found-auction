@@ -34,6 +34,8 @@ export type Organization = {
   type: OrgType;
   contactNote?: string;
   createdAt: string;
+  // ログイン(Cognito custom:orgId でこのorgIdに紐づくアカウント)を発行済みなら、そのsub
+  loginSub?: string;
 };
 
 export type AdminOrgInput = {
@@ -115,6 +117,8 @@ export type LostItem = {
   pickupDate?: string;
   pickupCode?: string;
   pickupDeadline?: string;
+  // 出品元が受け取り拠点へ現物を納品したことを確認した日時（購入者の受け取りとは独立して管理）
+  orgHandoverAt?: string;
 };
 
 export type Bid = {
@@ -125,6 +129,25 @@ export type Bid = {
   amount: number;
   createdAt: string;
   sourceIp?: string;
+};
+
+export type Favorite = {
+  userSub: string;
+  itemId: string;
+  createdAt: string;
+};
+
+export type InquiryStatus = 'new' | 'reviewed';
+
+// 出品元アカウントから運営への問い合わせ
+export type Inquiry = {
+  inquiryId: string;
+  orgId: string;
+  orgName: string;
+  fromSub: string;
+  message: string;
+  status: InquiryStatus;
+  createdAt: string;
 };
 
 export type BidderSummary = {

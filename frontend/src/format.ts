@@ -1,3 +1,5 @@
+import type { LostItem } from './types';
+
 const yenFormatter = new Intl.NumberFormat('ja-JP');
 
 export const yen = (amount: number): string => `¥${yenFormatter.format(amount)}`;
@@ -39,6 +41,32 @@ export const formatFoundMonth = (foundMonth: string): string => {
   const monthNumber = Number.parseInt(month, 10);
   if (Number.isNaN(monthNumber)) return foundMonth;
   return `${year}年${monthNumber}月ごろ`;
+};
+
+export type HandoverStatus = {
+  label: string;
+  chipClass: 'status-chip--sold' | 'status-chip--pending' | 'status-chip--done';
+};
+
+// 落札後の受け渡しは「購入者の受け取り」と「出品元の納品」の両方が独立して確認され、
+// 両方揃った時点で自動的に完了扱いになる（どちらか一方の操作では完了にならない）。
+export const handoverStatus = (item: LostItem): HandoverStatus => {
+  const buyerDone = item.pickupStatus === 'completed';
+  const orgDone = item.orgHandoverAt !== undefined;
+
+  if (buyerDone && orgDone) {
+    return { label: '受け渡し完了(双方確認済み)', chipClass: 'status-chip--done' };
+  }
+  if (buyerDone && !orgDone) {
+    return { label: '購入者受取済み・出品元の納品待ち', chipClass: 'status-chip--pending' };
+  }
+  if (!buyerDone && orgDone) {
+    return { label: '出品元納品済み・購入者の受取待ち', chipClass: 'status-chip--pending' };
+  }
+  if (item.pickupStatus === 'reserved') {
+    return { label: '受取予約済み', chipClass: 'status-chip--sold' };
+  }
+  return { label: '受け取り前', chipClass: 'status-chip--sold' };
 };
 
 export const formatDate = (dateStr: string): string => {

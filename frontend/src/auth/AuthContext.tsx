@@ -25,6 +25,8 @@ export type AuthUserInfo = {
   email: string;
   nickname: string;
   isAdmin: boolean;
+  isOrg: boolean;
+  orgId?: string;
 };
 
 export type AuthState =
@@ -101,11 +103,14 @@ const extractUser = (payload: JwtPayload): AuthUserInfo | null => {
   const nickname = payload['nickname'];
   const email = payload['email'];
   const groups = payload['cognito:groups'];
+  const orgId = payload['custom:orgId'];
   return {
     sub,
     nickname: typeof nickname === 'string' && nickname !== '' ? nickname : '利用者',
     email: typeof email === 'string' ? email : '',
     isAdmin: Array.isArray(groups) && groups.some((g) => g === 'admin'),
+    isOrg: Array.isArray(groups) && groups.some((g) => g === 'org'),
+    orgId: typeof orgId === 'string' && orgId !== '' ? orgId : undefined,
   };
 };
 

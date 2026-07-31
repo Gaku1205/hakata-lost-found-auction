@@ -329,6 +329,29 @@ export const postOrgHandover = (itemId: string): Promise<OrgHandoverResponse> =>
     { method: 'POST' },
   );
 
+export const orgCreateItem = (input: AdminItemInput): Promise<ItemResponse> =>
+  request('/api/org/items', isItemResponse, jsonInit('POST', input));
+
+export const orgUpdateItem = (
+  itemId: string,
+  input: AdminItemInput,
+): Promise<ItemResponse> =>
+  request(
+    `/api/org/items/${encodeURIComponent(itemId)}`,
+    isItemResponse,
+    jsonInit('PUT', input),
+  );
+
+export const orgRequestImageUploadUrl = (
+  itemId: string,
+  contentType: string,
+): Promise<ImageUploadUrlResponse> =>
+  request(
+    '/api/org/images/upload-url',
+    isImageUploadUrlResponse,
+    jsonInit('POST', { itemId, contentType }),
+  );
+
 // ダミー決済（実際の課金は発生しない）
 export const postPayment = (itemId: string): Promise<PaymentResponse> =>
   request(`/api/items/${encodeURIComponent(itemId)}/pay`, isPaymentResponse, {

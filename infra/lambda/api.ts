@@ -1044,6 +1044,31 @@ const adminReviewInquiry = async (inquiryId: string): Promise<APIGatewayProxyRes
   return json(200, { status: 'reviewed' });
 };
 
+const buildNewItem = (input: AdminItemInput, org: Organization): LostItem => {
+  const itemId = `i-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  return {
+    itemId,
+    ...input,
+    currentPrice: input.startPrice,
+    bidCount: 0,
+    status: 'active',
+    noticeDate: addDays(input.foundDate, NOTICE_WINDOW_DAYS),
+    custodyEndDate: addDays(input.foundDate, CUSTODY_PERIOD_DAYS),
+    caseNumber: generateCaseNumber(org, itemId, input.foundDate),
+    orgId: org.orgId,
+    orgName: org.name,
+    orgType: org.type,
+  };
+};
+
+const applyItemUpdate = (existing: LostItem, input: AdminItemInput): LostItem => ({
+  ...existing,
+  ...input,
+  currentPrice: existing.bidCount === 0 ? input.startPrice : existing.currentPrice,
+  noticeDate: addDays(input.foundDate, NOTICE_WINDOW_DAYS),
+  custodyEndDate: addDays(input.foundDate, CUSTODY_PERIOD_DAYS),
+});
+
 const adminCreateItem = async (body: string | null): Promise<APIGatewayProxyResult> => {
   const data = parseBody(body);
   if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
@@ -1060,20 +1085,7 @@ const adminCreateItem = async (body: string | null): Promise<APIGatewayProxyResu
   const org: unknown = orgResult.Item;
   if (!isOrganization(org)) return json(404, { message: '出品元が見つかりません' });
 
-  const itemId = `i-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  const item: LostItem = {
-    itemId,
-    ...input,
-    currentPrice: input.startPrice,
-    bidCount: 0,
-    status: 'active',
-    noticeDate: addDays(input.foundDate, NOTICE_WINDOW_DAYS),
-    custodyEndDate: addDays(input.foundDate, CUSTODY_PERIOD_DAYS),
-    caseNumber: generateCaseNumber(org, itemId, input.foundDate),
-    orgId: org.orgId,
-    orgName: org.name,
-    orgType: org.type,
-  };
+  const item = buildNewItem(input, org);
   await doc.send(new PutCommand({ TableName: ITEMS_TABLE, Item: item }));
   return json(201, { item });
 };
@@ -1099,13 +1111,65 @@ const adminUpdateItem = async (
     return json(409, { message: '入札がある出品の開始価格は変更できません' });
   }
 
-  const updated: LostItem = {
-    ...existing,
-    ...input,
-    currentPrice: existing.bidCount === 0 ? input.startPrice : existing.currentPrice,
-    noticeDate: addDays(input.foundDate, NOTICE_WINDOW_DAYS),
-    custodyEndDate: addDays(input.foundDate, CUSTODY_PERIOD_DAYS),
-  };
+  const updated = applyItemUpdate(existing, input);
+  await doc.send(new PutCommand({ TableName: ITEMS_TABLE, Item: updated }));
+  return json(200, { item: updated });
+};
+
+// 出品元(org)アカウント自身による出品の作成・編集。管理者による代理登録（adminCreateItem/adminUpdateItem）と
+// 同じ入力バリデーション・データ形状を使うが、出品元IDはリクエスト値ではなくログインユーザーのorgIdから決める。
+const orgCreateItem = async (
+  user: AuthUser,
+  body: string | null,
+): Promise<APIGatewayProxyResult> => {
+  if (user.orgId === undefined) {
+    return json(403, { message: 'このアカウントには出品元が紐づいていません' });
+  }
+  const data = parseBody(body);
+  if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
+  const input = parseAdminItemInput(data);
+  if (typeof input === 'string') return json(400, { message: input });
+
+  const orgResult = await doc.send(
+    new GetCommand({ TableName: ORGANIZATIONS_TABLE, Key: { orgId: user.orgId } }),
+  );
+  const org: unknown = orgResult.Item;
+  if (!isOrganization(org)) return json(404, { message: '出品元が見つかりません' });
+
+  const item = buildNewItem(input, org);
+  await doc.send(new PutCommand({ TableName: ITEMS_TABLE, Item: item }));
+  return json(201, { item });
+};
+
+const orgUpdateItem = async (
+  user: AuthUser,
+  itemId: string,
+  body: string | null,
+): Promise<APIGatewayProxyResult> => {
+  if (user.orgId === undefined) {
+    return json(403, { message: 'このアカウントには出品元が紐づいていません' });
+  }
+  const data = parseBody(body);
+  if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
+  const input = parseAdminItemInput(data);
+  if (typeof input === 'string') return json(400, { message: input });
+
+  const itemResult = await doc.send(
+    new GetCommand({ TableName: ITEMS_TABLE, Key: { itemId } }),
+  );
+  const existing: unknown = itemResult.Item;
+  if (!isLostItem(existing)) return json(404, { message: '出品が見つかりません' });
+  if (existing.orgId !== user.orgId) {
+    return json(403, { message: 'この出品元が登録した商品ではありません' });
+  }
+  if (existing.status !== 'active') {
+    return json(409, { message: '終了済みの出品は編集できません' });
+  }
+  if (existing.bidCount > 0 && input.startPrice !== existing.startPrice) {
+    return json(409, { message: '入札がある出品の開始価格は変更できません' });
+  }
+
+  const updated = applyItemUpdate(existing, input);
   await doc.send(new PutCommand({ TableName: ITEMS_TABLE, Item: updated }));
   return json(200, { item: updated });
 };
@@ -1221,7 +1285,8 @@ const adminCompletePickup = async (
   return json(200, { pickupStatus: 'completed' });
 };
 
-const adminImageUploadUrl = async (body: string | null): Promise<APIGatewayProxyResult> => {
+// 画像アップロード用の署名付きURL発行。管理者・出品元の双方が自分の出品に対して利用する。
+const requestImageUploadUrl = async (body: string | null): Promise<APIGatewayProxyResult> => {
   const data = parseBody(body);
   if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
 
@@ -1556,8 +1621,17 @@ export const handler = async (
       if (user === null) return json(401, { message: 'ログインが必要です' });
       if (!user.isOrg) return json(403, { message: '出品元権限がありません' });
 
-      if (segments[2] === 'items' && segments.length === 3 && method === 'GET') {
-        return await getOrgItems(user);
+      if (segments[2] === 'items' && segments.length === 3) {
+        if (method === 'GET') return await getOrgItems(user);
+        if (method === 'POST') return await orgCreateItem(user, event.body);
+      }
+      if (
+        segments[2] === 'items' &&
+        segments.length === 4 &&
+        segments[3] !== undefined &&
+        method === 'PUT'
+      ) {
+        return await orgUpdateItem(user, decodeURIComponent(segments[3]), event.body);
       }
       if (
         segments[2] === 'items' &&
@@ -1574,6 +1648,9 @@ export const handler = async (
       }
       if (segments[2] === 'inquiries' && segments.length === 3 && method === 'POST') {
         return await submitOrgInquiry(event.body, user);
+      }
+      if (segments[2] === 'images' && segments[3] === 'upload-url' && segments.length === 4 && method === 'POST') {
+        return await requestImageUploadUrl(event.body);
       }
       return json(404, { message: 'Not Found' });
     }
@@ -1593,7 +1670,7 @@ export const handler = async (
         return await adminGetCloudFormation();
       }
       if (segments[2] === 'images' && segments[3] === 'upload-url' && segments.length === 4 && method === 'POST') {
-        return await adminImageUploadUrl(event.body);
+        return await requestImageUploadUrl(event.body);
       }
       if (segments[2] === 'organizations' && segments.length === 3) {
         if (method === 'GET') return await adminListOrganizations();

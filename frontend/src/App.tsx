@@ -16,6 +16,7 @@ import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
 import { MyPage } from './pages/MyPage';
 import { OrgContact } from './pages/org/OrgContact';
+import { OrgItemForm } from './pages/org/OrgItemForm';
 import { OrgItems } from './pages/org/OrgItems';
 import { OrgRevenue } from './pages/org/OrgRevenue';
 import { PartnerApply } from './pages/PartnerApply';
@@ -227,6 +228,22 @@ export const App = (): JSX.Element => (
           element={
             <RequireOrg>
               <OrgContact />
+            </RequireOrg>
+          }
+        />
+        <Route
+          path="/org/items/new"
+          element={
+            <RequireOrg>
+              <OrgItemForm />
+            </RequireOrg>
+          }
+        />
+        <Route
+          path="/org/items/:itemId/edit"
+          element={
+            <RequireOrg>
+              <OrgItemForm />
             </RequireOrg>
           }
         />

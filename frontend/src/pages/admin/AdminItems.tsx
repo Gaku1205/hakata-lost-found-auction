@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ApiError,
@@ -7,8 +7,11 @@ import {
   adminDeleteItem,
   fetchItems,
 } from '../../api';
+import { Pagination } from '../../components/Pagination';
+import { ItemListTabsNav } from '../../components/ItemListTabsNav';
 import { handoverStatus, yen } from '../../format';
 import { useLoadable } from '../../hooks';
+import { ITEM_LIST_PAGE_SIZE, countByTab, matchesItemListTab, type ItemListTab } from '../../itemListTabs';
 import type { LostItem } from '../../types';
 import { CATEGORY_LABELS } from '../../types';
 import { AdminTabs } from './AdminTabs';
@@ -21,11 +24,12 @@ const endTimeLabel = (iso: string): string => {
 
 type RowProps = {
   item: LostItem;
+  showSoldColumns: boolean;
   onChanged: () => void;
   onError: (message: string) => void;
 };
 
-const AdminRow = ({ item, onChanged, onError }: RowProps): JSX.Element => {
+const AdminRow = ({ item, showSoldColumns, onChanged, onError }: RowProps): JSX.Element => {
   const [busy, setBusy] = useState(false);
   const [code, setCode] = useState('');
 
@@ -72,47 +76,51 @@ const AdminRow = ({ item, onChanged, onError }: RowProps): JSX.Element => {
       <td data-label="現在価格" className="table-num">{yen(item.currentPrice)}</td>
       <td data-label="入札" className="table-num">{item.bidCount}件</td>
       <td data-label="終了日時">{endTimeLabel(item.endTime)}</td>
-      <td data-label="購入者">{item.status === 'sold' ? (item.winnerNickname ?? '—') : '—'}</td>
-      <td data-label="受け取り日時">{item.status === 'sold' ? (item.pickupDate ?? '—') : '—'}</td>
-      <td data-label="受け取りBOX番号">
-        {item.status === 'sold' && item.pickupBoxNumber !== undefined
-          ? `${item.pickupBoxNumber}番`
-          : '—'}
-      </td>
-      <td data-label="受け取り状態">
-        {item.status === 'sold' ? (
-          <>
-            <span className={`status-chip ${handoverStatus(item).chipClass}`}>
-              {handoverStatus(item).label}
-            </span>
-            {item.pickupStatus === 'reserved' ? (
+      {showSoldColumns ? (
+        <>
+          <td data-label="購入者">{item.status === 'sold' ? (item.winnerNickname ?? '—') : '—'}</td>
+          <td data-label="受け取り日時">{item.status === 'sold' ? (item.pickupDate ?? '—') : '—'}</td>
+          <td data-label="受け取りBOX番号">
+            {item.status === 'sold' && item.pickupBoxNumber !== undefined
+              ? `${item.pickupBoxNumber}番`
+              : '—'}
+          </td>
+          <td data-label="受け取り状態">
+            {item.status === 'sold' ? (
               <>
-                <p className="table-sub">
-                  窓口での代理照合（通常は購入者が無人ボックスで自己解錠します）
-                </p>
-                <form className="pickup-verify" onSubmit={handleComplete}>
-                  <label className="sr-only" htmlFor={`code-${item.itemId}`}>
-                    受取コード
-                  </label>
-                  <input
-                    id={`code-${item.itemId}`}
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="受取コード"
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                  />
-                  <button type="submit" className="btn btn--ghost btn--small" disabled={busy}>
-                    照合して完了
-                  </button>
-                </form>
+                <span className={`status-chip ${handoverStatus(item).chipClass}`}>
+                  {handoverStatus(item).label}
+                </span>
+                {item.pickupStatus === 'reserved' ? (
+                  <>
+                    <p className="table-sub">
+                      窓口での代理照合（通常は購入者が無人ボックスで自己解錠します）
+                    </p>
+                    <form className="pickup-verify" onSubmit={handleComplete}>
+                      <label className="sr-only" htmlFor={`code-${item.itemId}`}>
+                        受取コード
+                      </label>
+                      <input
+                        id={`code-${item.itemId}`}
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="受取コード"
+                        value={code}
+                        onChange={(e) => setCode(e.target.value)}
+                      />
+                      <button type="submit" className="btn btn--ghost btn--small" disabled={busy}>
+                        照合して完了
+                      </button>
+                    </form>
+                  </>
+                ) : null}
               </>
-            ) : null}
-          </>
-        ) : (
-          <span className="table-sub">—</span>
-        )}
-      </td>
+            ) : (
+              <span className="table-sub">—</span>
+            )}
+          </td>
+        </>
+      ) : null}
       <td data-label="操作">
         <div className="table-actions">
           {item.status === 'active' ? (
@@ -151,6 +159,27 @@ const AdminRow = ({ item, onChanged, onError }: RowProps): JSX.Element => {
 export const AdminItems = (): JSX.Element => {
   const [result, reload] = useLoadable(() => fetchItems(), []);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [tab, setTab] = useState<ItemListTab>('all');
+  const [page, setPage] = useState(1);
+
+  const allItems = result.state === 'ready' ? result.data.items : [];
+  const counts = useMemo(() => countByTab(allItems), [allItems]);
+  const filteredItems = useMemo(
+    () => allItems.filter((item) => matchesItemListTab(item, tab)),
+    [allItems, tab],
+  );
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / ITEM_LIST_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageItems = filteredItems.slice(
+    (currentPage - 1) * ITEM_LIST_PAGE_SIZE,
+    currentPage * ITEM_LIST_PAGE_SIZE,
+  );
+  const showSoldColumns = tab !== 'active';
+
+  const changeTab = (next: ItemListTab): void => {
+    setTab(next);
+    setPage(1);
+  };
 
   return (
     <div className="container section">
@@ -198,37 +227,53 @@ export const AdminItems = (): JSX.Element => {
       ) : null}
 
       {result.state === 'ready' ? (
-        <div className="table-wrap">
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>品名</th>
-                <th>状態</th>
-                <th>現在価格</th>
-                <th>入札</th>
-                <th>終了日時</th>
-                <th>購入者</th>
-                <th>受け取り日時</th>
-                <th>受け取りBOX番号</th>
-                <th>受け取り状態</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.data.items.map((item) => (
-                <AdminRow
-                  key={item.itemId}
-                  item={item}
-                  onChanged={() => {
-                    setActionError(null);
-                    reload();
-                  }}
-                  onError={setActionError}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <ItemListTabsNav tab={tab} counts={counts} onChange={changeTab} />
+
+          {filteredItems.length === 0 ? (
+            <p className="empty">この条件に合う出品はありません。</p>
+          ) : (
+            <>
+              <div className="table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>品名</th>
+                      <th>状態</th>
+                      <th>現在価格</th>
+                      <th>入札</th>
+                      <th>終了日時</th>
+                      {showSoldColumns ? (
+                        <>
+                          <th>購入者</th>
+                          <th>受け取り日時</th>
+                          <th>受け取りBOX番号</th>
+                          <th>受け取り状態</th>
+                        </>
+                      ) : null}
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageItems.map((item) => (
+                      <AdminRow
+                        key={item.itemId}
+                        item={item}
+                        showSoldColumns={showSoldColumns}
+                        onChanged={() => {
+                          setActionError(null);
+                          reload();
+                        }}
+                        onError={setActionError}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Pagination page={currentPage} totalPages={totalPages} onChange={setPage} />
+            </>
+          )}
+        </>
       ) : null}
     </div>
   );

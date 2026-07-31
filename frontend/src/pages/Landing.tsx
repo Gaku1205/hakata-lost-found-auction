@@ -56,13 +56,15 @@ export const Landing = (): JSX.Element => (
       </h2>
       <div className="ledger__rows">
         <div className="ledger__row">
-          <span className="ledger__stat">約8割</span>
-          <p>警察に届く遺失物のうち、持ち主に返還されるのは約8割。拾得者への譲渡は約1割にとどまります。</p>
+          <span className="ledger__stat">33.3%</span>
+          <p>
+            東京都だけで年間149.9万件の遺失物が「都へ帰属」。届出のあった449.8万件のうち3件に1件は持ち主のもとに戻らず、その多くが単一業者への一括安値売却で処理されており、住民が直接購入できる透明な仕組みがありませんでした。
+          </p>
         </div>
         <div className="ledger__row">
-          <span className="ledger__stat">約1割</span>
+          <span className="ledger__stat">13.3%</span>
           <p>
-            残りは都道府県などに帰属し、その多くが単一業者への一括安値売却で処理されており、住民が直接購入できる透明な仕組みがありませんでした。
+            遺失者への返還はわずか59.7万件。傘は33.2万点の拾得に対し返還率1.4%と、身近な物ほど戻りにくいのが実情です。
           </p>
         </div>
         <div className="ledger__row">
@@ -70,6 +72,9 @@ export const Landing = (): JSX.Element => (
           <p>博多駅・天神・キャナルシティなど人流の多い交通・商業拠点を抱える博多エリアは、遺失物の取扱件数が多いと想定される地域です。</p>
         </div>
       </div>
+      <p className="panel__footnote">
+        ※ 出典: 警視庁「遺失物取扱状況（令和7年中）」（東京都・令和7年、計449.8万件）。件数は都道府県により異なります。
+      </p>
     </section>
 
     {/* コンセプト: 3つの掛け算 */}

@@ -27,6 +27,7 @@ import { authenticate, type AuthUser } from './auth';
 import {
   CONDITION_ORDER,
   ITEM_CATEGORIES,
+  MAX_ITEM_IMAGES,
   isConditionRank,
   isItemCategory,
   isOrgType,
@@ -753,7 +754,7 @@ const parseAdminItemInput = (
   const pickupLocation = data['pickupLocation'];
   const startPrice = data['startPrice'];
   const endTime = data['endTime'];
-  const imageUrlRaw = data['imageUrl'];
+  const imageUrlsRaw = data['imageUrls'];
   const conditionRank = data['conditionRank'];
   const quantity = data['quantity'];
   const foundDate = data['foundDate'];
@@ -789,12 +790,18 @@ const parseAdminItemInput = (
   if (typeof endTime !== 'string' || Number.isNaN(new Date(endTime).getTime())) {
     return '終了日時を選択してください';
   }
-  if (imageUrlRaw !== undefined && typeof imageUrlRaw !== 'string') {
-    return '画像URLが不正です';
+  if (
+    imageUrlsRaw !== undefined &&
+    (!Array.isArray(imageUrlsRaw) ||
+      imageUrlsRaw.length > MAX_ITEM_IMAGES ||
+      imageUrlsRaw.some((url) => typeof url !== 'string' || url.trim() === ''))
+  ) {
+    return `画像は${MAX_ITEM_IMAGES}枚まで登録できます`;
   }
-  const imageUrl = typeof imageUrlRaw === 'string' && imageUrlRaw.trim() !== ''
-    ? imageUrlRaw.trim()
-    : undefined;
+  const imageUrls =
+    Array.isArray(imageUrlsRaw) && imageUrlsRaw.length > 0
+      ? (imageUrlsRaw as string[]).map((url) => url.trim())
+      : undefined;
   if (!isConditionRank(conditionRank)) {
     return '状態ランクを選択してください';
   }
@@ -821,7 +828,7 @@ const parseAdminItemInput = (
     pickupLocation: pickupLocation.trim(),
     startPrice,
     endTime: new Date(endTime).toISOString(),
-    imageUrl,
+    imageUrls,
     conditionRank,
     quantity,
     foundDate: new Date(foundDate).toISOString().slice(0, 10),
@@ -1342,8 +1349,10 @@ const adminCompletePickup = async (
 
 // ---------- 出品画像のAI解析 ----------
 
-// 1リクエストあたりの画像サイズ上限。フロント側で長辺1024pxへ縮小してから送る想定。
+// 1枚あたりの画像サイズ上限。フロント側で長辺1024pxへ縮小してから送る想定。
 const ANALYZE_IMAGE_MAX_BASE64_LENGTH = 3_000_000;
+// 1リクエスト（複数枚合計）の上限。API Gatewayのペイロード上限とAI解析コストの両方を抑える。
+const ANALYZE_IMAGES_MAX_TOTAL_BASE64_LENGTH = 10_000_000;
 
 const ITEM_SUGGESTION_SCHEMA = {
   type: 'object',
@@ -1363,6 +1372,9 @@ const ITEM_SUGGESTION_SCHEMA = {
 
 const ANALYZE_SYSTEM_PROMPT = `あなたは遺失物オークション「めぐりモノ」の出品担当者です。
 落とし物の写真から、出品フォームの各項目を日本語で埋めてください。
+同一の落とし物を複数アングルから撮った写真が渡されることがあります。その場合は
+すべての写真を突き合わせて1つの落とし物についての情報として統合し、写真ごとに
+矛盾する内容があれば全体として最も妥当な1つの値にまとめてください。
 
 - title: 検索されやすい具体的な品名。40文字以内。「黒 折りたたみ傘（自動開閉）」のように特徴を含める。
 - category: 選択肢から最も近いものを1つ選ぶ。
@@ -1409,7 +1421,15 @@ type AnalyzableMediaType = 'image/jpeg' | 'image/png' | 'image/webp';
 const isAnalyzableMediaType = (value: unknown): value is AnalyzableMediaType =>
   value === 'image/jpeg' || value === 'image/png' || value === 'image/webp';
 
-// 出品画像をClaudeに渡し、出品フォームの各項目を推定して返す。管理者・出品元の双方が利用する。
+type AnalyzableImage = { imageBase64: string; mediaType: AnalyzableMediaType };
+
+const isAnalyzableImage = (value: unknown): value is AnalyzableImage =>
+  isRecord(value) &&
+  typeof value['imageBase64'] === 'string' &&
+  value['imageBase64'] !== '' &&
+  isAnalyzableMediaType(value['mediaType']);
+
+// 出品画像（1〜複数枚）をClaudeに渡し、出品フォームの各項目を推定して返す。管理者・出品元の双方が利用する。
 const analyzeItemImage = async (body: string | null): Promise<APIGatewayProxyResult> => {
   if (ANTHROPIC_API_KEY_SECRET_ARN === '') {
     return json(503, { message: 'AI解析は現在利用できません' });
@@ -1417,16 +1437,23 @@ const analyzeItemImage = async (body: string | null): Promise<APIGatewayProxyRes
   const data = parseBody(body);
   if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
 
-  const imageBase64 = data['imageBase64'];
-  const mediaType = data['mediaType'];
-  if (typeof imageBase64 !== 'string' || imageBase64 === '') {
+  const imagesRaw = data['images'];
+  if (!Array.isArray(imagesRaw) || imagesRaw.length === 0) {
     return json(400, { message: '画像が指定されていません' });
   }
-  if (imageBase64.length > ANALYZE_IMAGE_MAX_BASE64_LENGTH) {
+  if (imagesRaw.length > MAX_ITEM_IMAGES) {
+    return json(400, { message: `画像は${MAX_ITEM_IMAGES}枚まで指定できます` });
+  }
+  if (!imagesRaw.every(isAnalyzableImage)) {
+    return json(400, { message: '画像形式はJPEG・PNG・WEBPのいずれかにしてください' });
+  }
+  const images = imagesRaw as AnalyzableImage[];
+  if (images.some((image) => image.imageBase64.length > ANALYZE_IMAGE_MAX_BASE64_LENGTH)) {
     return json(413, { message: '画像サイズが大きすぎます' });
   }
-  if (!isAnalyzableMediaType(mediaType)) {
-    return json(400, { message: '画像形式はJPEG・PNG・WEBPのいずれかにしてください' });
+  const totalBase64Length = images.reduce((sum, image) => sum + image.imageBase64.length, 0);
+  if (totalBase64Length > ANALYZE_IMAGES_MAX_TOTAL_BASE64_LENGTH) {
+    return json(413, { message: '画像サイズの合計が大きすぎます' });
   }
 
   let apiKey: string;
@@ -1448,11 +1475,17 @@ const analyzeItemImage = async (body: string | null): Promise<APIGatewayProxyRes
         {
           role: 'user',
           content: [
+            ...images.map((image) => ({
+              type: 'image' as const,
+              source: { type: 'base64' as const, media_type: image.mediaType, data: image.imageBase64 },
+            })),
             {
-              type: 'image',
-              source: { type: 'base64', media_type: mediaType, data: imageBase64 },
+              type: 'text',
+              text:
+                images.length > 1
+                  ? `この${images.length}枚は同じ落とし物を複数アングルから撮った写真です。出品フォームの各項目を埋めてください。`
+                  : 'この写真の落とし物について、出品フォームの各項目を埋めてください。',
             },
-            { type: 'text', text: 'この写真の落とし物について、出品フォームの各項目を埋めてください。' },
           ],
         },
       ],
@@ -1515,8 +1548,9 @@ const requestImageUploadUrl = async (body: string | null): Promise<APIGatewayPro
 
   const ext = ALLOWED_IMAGE_TYPES[contentType];
   // CloudFrontはパスをそのままS3オブジェクトキーとして origin に転送するため、
-  // キー自体に配信パス（uploads/）を含めておく。
-  const key = `uploads/items/${itemId}/${Date.now()}.${ext}`;
+  // キー自体に配信パス（uploads/）を含めておく。ランダムサフィックスは、
+  // 複数画像を連続アップロードする際に同一ミリ秒でキーが衝突するのを防ぐため。
+  const key = `uploads/items/${itemId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   const uploadUrl = await getSignedUrl(
     s3,
     new PutObjectCommand({ Bucket: IMAGES_BUCKET, Key: key, ContentType: contentType }),

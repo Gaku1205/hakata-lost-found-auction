@@ -203,9 +203,13 @@ export const ItemDetail = (): JSX.Element => {
   const [localBidCount, setLocalBidCount] = useState(0);
   const [localEndTime, setLocalEndTime] = useState<string | null>(null);
   const [isFavorited, setIsFavorited] = useState(false);
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
 
   useEffect(() => {
-    if (result.state === 'ready') setIsFavorited(result.data.isFavorited);
+    if (result.state === 'ready') {
+      setIsFavorited(result.data.isFavorited);
+      setActiveImageIndex(0);
+    }
   }, [result]);
 
   if (result.state === 'loading') {
@@ -235,6 +239,8 @@ export const ItemDetail = (): JSX.Element => {
   }
 
   const { item } = result.data;
+  const imageUrls = item.imageUrls ?? [];
+  const activeImageUrl = imageUrls[activeImageIndex] ?? imageUrls[0];
   const currentPrice = localPrice ?? item.currentPrice;
   const bidCount = item.bidCount + localBidCount;
   const bids: readonly Bid[] = [...localBids, ...result.data.bids];
@@ -266,16 +272,34 @@ export const ItemDetail = (): JSX.Element => {
 
       <div className="detail">
         <div className="detail__main">
-          <div
-            className={`detail__media${isClosed ? ' detail__media--closed' : ''}`}
-            aria-hidden="true"
-          >
-            {item.imageUrl !== undefined ? (
-              <img className="detail__media-img" src={item.imageUrl} alt="" loading="lazy" />
-            ) : (
-              <CategoryIcon category={item.category} size={96} />
-            )}
-            {isClosed ? <span className="card__badge">落札済み</span> : null}
+          <div className="detail__gallery">
+            <div
+              className={`detail__media${isClosed ? ' detail__media--closed' : ''}`}
+              aria-hidden="true"
+            >
+              {activeImageUrl !== undefined ? (
+                <img className="detail__media-img" src={activeImageUrl} alt="" loading="lazy" />
+              ) : (
+                <CategoryIcon category={item.category} size={96} />
+              )}
+              {isClosed ? <span className="card__badge">落札済み</span> : null}
+            </div>
+            {imageUrls.length > 1 ? (
+              <div className="detail__thumbs" role="group" aria-label="商品画像を切り替え">
+                {imageUrls.map((url, index) => (
+                  <button
+                    key={url}
+                    type="button"
+                    className={`detail__thumb${index === activeImageIndex ? ' detail__thumb--active' : ''}`}
+                    aria-pressed={index === activeImageIndex}
+                    aria-label={`画像 ${index + 1}/${imageUrls.length}`}
+                    onClick={() => setActiveImageIndex(index)}
+                  >
+                    <img src={url} alt="" loading="lazy" />
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
           <span className="chip">{CATEGORY_LABELS[item.category]}</span>
           <span className={`condition-chip condition-chip--${item.conditionRank}`}>

@@ -23,11 +23,16 @@ import {
   CATEGORY_ORDER,
   CONDITION_LABELS,
   CONDITION_ORDER,
+  MAX_ITEM_IMAGES,
   ORG_TYPE_LABELS,
   PICKUP_LOCATION_PRESETS,
   isConditionRank,
   isItemCategory,
 } from '../../types';
+
+type ImageSlot =
+  | { kind: 'existing'; url: string }
+  | { kind: 'new'; file: File; previewUrl: string };
 
 type FormState = {
   title: string;
@@ -97,10 +102,7 @@ export const AdminItemForm = (): JSX.Element => {
   const [submitting, setSubmitting] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
 
-  const [originalImageUrl, setOriginalImageUrl] = useState<string | undefined>(undefined);
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [imageRemoved, setImageRemoved] = useState(false);
+  const [imageSlots, setImageSlots] = useState<ImageSlot[]>([]);
   const [imageError, setImageError] = useState<string | null>(null);
 
   const [analyzing, setAnalyzing] = useState(false);
@@ -158,8 +160,7 @@ export const AdminItemForm = (): JSX.Element => {
           orgId: item.orgId,
         });
         setExistingOrg({ name: item.orgName, type: item.orgType });
-        setOriginalImageUrl(item.imageUrl);
-        setImagePreview(item.imageUrl ?? null);
+        setImageSlots((item.imageUrls ?? []).map((url) => ({ kind: 'existing', url })));
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -192,14 +193,16 @@ export const AdminItemForm = (): JSX.Element => {
     }));
   };
 
-  const runAnalysis = (file: File): void => {
+  const runAnalysis = (files: File[]): void => {
+    if (files.length === 0) return;
     setAnalyzing(true);
     setAnalyzed(false);
     setAnalyzeError(null);
     void (async () => {
       try {
-        const { base64, mediaType } = await prepareImageForAnalysis(file);
-        const { suggestion } = await adminAnalyzeItemImage(base64, mediaType);
+        const prepared = await Promise.all(files.map((file) => prepareImageForAnalysis(file)));
+        const images = prepared.map((p) => ({ imageBase64: p.base64, mediaType: p.mediaType }));
+        const { suggestion } = await adminAnalyzeItemImage(images);
         applySuggestion(suggestion);
         setAnalyzed(true);
       } catch (err: unknown) {
@@ -217,38 +220,69 @@ export const AdminItemForm = (): JSX.Element => {
   };
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files ?? []);
     event.target.value = '';
-    if (file === undefined) return;
+    if (files.length === 0) return;
     setImageError(null);
-    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-      setImageError('JPEG・PNG・WEBP形式の画像を選択してください');
+
+    const remainingSlots = MAX_ITEM_IMAGES - imageSlots.length;
+    if (remainingSlots <= 0) {
+      setImageError(`画像は${MAX_ITEM_IMAGES}枚まで登録できます`);
       return;
     }
-    if (file.size > MAX_IMAGE_BYTES) {
-      setImageError('画像サイズは5MB以内にしてください');
-      return;
+
+    const accepted: File[] = [];
+    let rejectedByLimit = false;
+    for (const file of files) {
+      if (accepted.length >= remainingSlots) {
+        rejectedByLimit = true;
+        break;
+      }
+      if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+        setImageError('JPEG・PNG・WEBP形式の画像を選択してください');
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        setImageError('画像サイズは5MB以内にしてください');
+        continue;
+      }
+      accepted.push(file);
     }
-    if (imagePreview !== null && imageFile !== null) {
-      URL.revokeObjectURL(imagePreview);
+    if (rejectedByLimit) {
+      setImageError(`画像は${MAX_ITEM_IMAGES}枚まで登録できます`);
     }
-    setImageFile(file);
-    setImageRemoved(false);
-    setImagePreview(URL.createObjectURL(file));
-    runAnalysis(file);
+    if (accepted.length === 0) return;
+
+    const newSlots: ImageSlot[] = accepted.map((file) => ({
+      kind: 'new',
+      file,
+      previewUrl: URL.createObjectURL(file),
+    }));
+    const updatedSlots = [...imageSlots, ...newSlots];
+    setImageSlots(updatedSlots);
+    runAnalysis(
+      updatedSlots.flatMap((slot) => (slot.kind === 'new' ? [slot.file] : [])),
+    );
   };
 
-  const handleRemoveImage = (): void => {
-    if (imagePreview !== null && imageFile !== null) {
-      URL.revokeObjectURL(imagePreview);
-    }
-    setImageFile(null);
-    setImagePreview(null);
-    setImageRemoved(true);
+  const handleRemoveSlot = (index: number): void => {
+    setImageSlots((prev) => {
+      const target = prev[index];
+      if (target?.kind === 'new') URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((_, i) => i !== index);
+    });
     setImageError(null);
-    setAnalyzing(false);
-    setAnalyzed(false);
-    setAnalyzeError(null);
+  };
+
+  const handleMakeThumbnail = (index: number): void => {
+    setImageSlots((prev) => {
+      if (index <= 0 || index >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      if (moved === undefined) return prev;
+      next.unshift(moved);
+      return next;
+    });
   };
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
@@ -314,27 +348,33 @@ export const AdminItemForm = (): JSX.Element => {
           throw new Error('出品IDの取得に失敗しました');
         }
 
-        let resolvedImageUrl = imageRemoved ? undefined : originalImageUrl;
-        if (imageFile !== null) {
-          setUploadingImage(true);
+        const hasNewImages = imageSlots.some((slot) => slot.kind === 'new');
+        if (hasNewImages) setUploadingImage(true);
+        const resolvedUrls: string[] = [];
+        for (const slot of imageSlots) {
+          if (slot.kind === 'existing') {
+            resolvedUrls.push(slot.url);
+            continue;
+          }
           const { uploadUrl, imageUrl } = await adminRequestImageUploadUrl(
             currentItemId,
-            imageFile.type,
+            slot.file.type,
           );
           const putResponse = await fetch(uploadUrl, {
             method: 'PUT',
-            headers: { 'Content-Type': imageFile.type },
-            body: imageFile,
+            headers: { 'Content-Type': slot.file.type },
+            body: slot.file,
           });
           if (!putResponse.ok) {
             throw new Error('画像のアップロードに失敗しました');
           }
-          resolvedImageUrl = imageUrl;
-          setUploadingImage(false);
+          resolvedUrls.push(imageUrl);
         }
+        if (hasNewImages) setUploadingImage(false);
 
-        if (isEdit || imageFile !== null || imageRemoved) {
-          await adminUpdateItem(currentItemId, { ...baseInput, imageUrl: resolvedImageUrl });
+        if (isEdit || resolvedUrls.length > 0) {
+          const imageUrls = resolvedUrls.length > 0 ? resolvedUrls : undefined;
+          await adminUpdateItem(currentItemId, { ...baseInput, imageUrls });
         }
 
         navigate('/admin', { replace: true });
@@ -420,8 +460,39 @@ export const AdminItemForm = (): JSX.Element => {
           <div className="field">
             <label htmlFor="form-image">商品画像</label>
             <div className="image-upload">
-              {imagePreview !== null ? (
-                <img src={imagePreview} alt="" className="image-upload__preview" />
+              {imageSlots.length > 0 ? (
+                <div className="image-upload__grid">
+                  {imageSlots.map((slot, index) => (
+                    <div
+                      key={slot.kind === 'existing' ? slot.url : slot.previewUrl}
+                      className="image-upload__item"
+                    >
+                      <img
+                        src={slot.kind === 'existing' ? slot.url : slot.previewUrl}
+                        alt=""
+                        className="image-upload__preview"
+                      />
+                      {index === 0 ? (
+                        <span className="image-upload__badge">サムネイル</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn--ghost btn--small"
+                          onClick={() => handleMakeThumbnail(index)}
+                        >
+                          先頭にする
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn--ghost btn--small"
+                        onClick={() => handleRemoveSlot(index)}
+                      >
+                        削除
+                      </button>
+                    </div>
+                  ))}
+                </div>
               ) : (
                 <div className="image-upload__placeholder" aria-hidden="true">
                   画像未設定
@@ -432,17 +503,10 @@ export const AdminItemForm = (): JSX.Element => {
                   id="form-image"
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
+                  multiple
                   onChange={handleFileChange}
+                  disabled={imageSlots.length >= MAX_ITEM_IMAGES}
                 />
-                {imagePreview !== null ? (
-                  <button
-                    type="button"
-                    className="btn btn--ghost btn--small"
-                    onClick={handleRemoveImage}
-                  >
-                    画像を削除
-                  </button>
-                ) : null}
               </div>
             </div>
             {imageError !== null ? (
@@ -463,11 +527,15 @@ export const AdminItemForm = (): JSX.Element => {
             {analyzeError !== null ? (
               <p className="ai-status ai-status--error" role="alert">
                 {analyzeError}
-                {imageFile !== null ? (
+                {imageSlots.some((slot) => slot.kind === 'new') ? (
                   <button
                     type="button"
                     className="btn btn--ghost btn--small"
-                    onClick={() => runAnalysis(imageFile)}
+                    onClick={() =>
+                      runAnalysis(
+                        imageSlots.flatMap((slot) => (slot.kind === 'new' ? [slot.file] : [])),
+                      )
+                    }
                   >
                     再試行
                   </button>
@@ -475,7 +543,7 @@ export const AdminItemForm = (): JSX.Element => {
               </p>
             ) : null}
             <p className="field__help">
-              JPEG・PNG・WEBP、5MBまで。画像を選ぶとAIが品名・カテゴリ・状態などを自動入力します
+              複数枚選択できます（最大{MAX_ITEM_IMAGES}枚、先頭がサムネイルになります）。JPEG・PNG・WEBP、1枚5MBまで。画像を選ぶとAIが品名・カテゴリ・状態などを自動入力します
             </p>
           </div>
 

@@ -21,8 +21,8 @@ export const ItemCard = ({ item, nowMs, index }: Props): JSX.Element => {
       style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
     >
       <div className="card__media" aria-hidden="true">
-        {item.imageUrl !== undefined ? (
-          <img className="card__media-img" src={item.imageUrl} alt="" loading="lazy" />
+        {item.imageUrls?.[0] !== undefined ? (
+          <img className="card__media-img" src={item.imageUrls[0]} alt="" loading="lazy" />
         ) : (
           <CategoryIcon category={item.category} />
         )}

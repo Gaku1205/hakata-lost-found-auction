@@ -357,13 +357,12 @@ export const orgRequestImageUploadUrl = (
   );
 
 export const orgAnalyzeItemImage = (
-  imageBase64: string,
-  mediaType: string,
+  images: AnalyzableImage[],
 ): Promise<ItemSuggestionResponse> =>
   request(
     '/api/org/images/analyze',
     isItemSuggestionResponse,
-    jsonInit('POST', { imageBase64, mediaType }),
+    jsonInit('POST', { images }),
   );
 
 // ダミー決済（実際の課金は発生しない）
@@ -430,6 +429,8 @@ export const adminFetchBidMonitor = (): Promise<BidMonitor> =>
 
 export const adminFetchStats = (): Promise<Stats> => request('/api/admin/stats', isStats);
 
+type AnalyzableImage = { imageBase64: string; mediaType: string };
+
 type ItemSuggestionResponse = { suggestion: ItemSuggestion };
 
 const isItemSuggestion = (value: unknown): value is ItemSuggestion =>
@@ -462,13 +463,12 @@ export const adminRequestImageUploadUrl = (
   );
 
 export const adminAnalyzeItemImage = (
-  imageBase64: string,
-  mediaType: string,
+  images: AnalyzableImage[],
 ): Promise<ItemSuggestionResponse> =>
   request(
     '/api/admin/images/analyze',
     isItemSuggestionResponse,
-    jsonInit('POST', { imageBase64, mediaType }),
+    jsonInit('POST', { images }),
   );
 
 export const adminListOrganizations = (): Promise<OrganizationsResponse> =>

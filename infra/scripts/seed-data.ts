@@ -1552,8 +1552,8 @@ const buildItems = (
       bidCount: seed.bidCount,
       status: seed.status,
       endTime: at(seed.endOffsetMs),
-      imageUrl: ITEM_IDS_WITH_PHOTO.has(seed.itemId)
-        ? `/images/items/${seed.itemId}.jpg`
+      imageUrls: ITEM_IDS_WITH_PHOTO.has(seed.itemId)
+        ? [`/images/items/${seed.itemId}.jpg`]
         : undefined,
       conditionRank: seed.conditionRank,
       quantity: seed.quantity,

@@ -90,7 +90,7 @@ export type LostItem = {
   bidCount: number;
   status: ItemStatus;
   endTime: string;
-  imageUrl?: string;
+  imageUrls?: string[];
   conditionRank: ConditionRank;
   quantity: number;
   foundDate: string;
@@ -202,7 +202,7 @@ export type AdminItemInput = {
   pickupLocation: string;
   startPrice: number;
   endTime: string;
-  imageUrl?: string;
+  imageUrls?: string[];
   conditionRank: ConditionRank;
   quantity: number;
   foundDate: string;
@@ -211,6 +211,8 @@ export type AdminItemInput = {
   color?: string;
   brand?: string;
 };
+
+export const MAX_ITEM_IMAGES = 5;
 
 export const CATEGORY_LABELS: Record<ItemCategory, string> = {
   umbrella: '傘',

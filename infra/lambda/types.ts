@@ -91,7 +91,7 @@ export type LostItem = {
   bidCount: number;
   status: ItemStatus;
   endTime: string;
-  imageUrl?: string;
+  imageUrls?: string[];
   conditionRank: ConditionRank;
   quantity: number;
   foundDate: string;
@@ -196,6 +196,8 @@ export const ITEM_CATEGORIES: readonly ItemCategory[] = [
 export const isItemCategory = (value: unknown): value is ItemCategory =>
   typeof value === 'string' && (ITEM_CATEGORIES as readonly string[]).includes(value);
 
+export const MAX_ITEM_IMAGES = 5;
+
 export type AdminItemInput = {
   title: string;
   category: ItemCategory;
@@ -205,7 +207,7 @@ export type AdminItemInput = {
   pickupLocation: string;
   startPrice: number;
   endTime: string;
-  imageUrl?: string;
+  imageUrls?: string[];
   conditionRank: ConditionRank;
   quantity: number;
   foundDate: string;

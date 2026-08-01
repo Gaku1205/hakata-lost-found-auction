@@ -2089,6 +2089,8 @@ button {
   display: flex;
   gap: 8px;
   margin-bottom: 20px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .admin-tabs__tab {
@@ -2096,6 +2098,7 @@ button {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   border: 1px solid var(--c-border);
   border-radius: var(--radius-pill);
   background: var(--c-surface);

@@ -1529,7 +1529,7 @@ const SEEDS: readonly SeedDef[] = [
 // frontend/public/images/items/ に実写真が用意済みのitemIdのみ。
 // それ以外はimageUrlを付けず、ItemCardのカテゴリアイコン表示にフォールバックさせる。
 const ITEM_IDS_WITH_PHOTO = new Set(
-  Array.from({ length: 14 }, (_, i) => `i-${String(i + 1).padStart(3, '0')}`),
+  Array.from({ length: 64 }, (_, i) => `i-${String(i + 1).padStart(3, '0')}`),
 );
 
 const buildItems = (

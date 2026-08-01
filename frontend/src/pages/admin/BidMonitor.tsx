@@ -110,7 +110,7 @@ export const BidMonitor = (): JSX.Element => {
             <h2 className="panel__heading">直近の入札（最新20件）</h2>
             <ul className="monitor-feed">
               {result.data.recentBids.map((bid) => (
-                <li key={bid.bidId} className="monitor-feed__row">
+                <li key={`${bid.itemId}-${bid.bidId}`} className="monitor-feed__row">
                   <span className="monitor-feed__name">{bid.bidderName}</span>
                   <Link className="monitor-feed__item" to={`/items/${bid.itemId}`}>
                     {bid.itemTitle}

@@ -30,6 +30,7 @@ export const isOrgType = (value: unknown): value is OrgType =>
 
 export type Organization = {
   orgId: string;
+  orgCode: string;
   name: string;
   type: OrgType;
   contactNote?: string;
@@ -38,6 +39,7 @@ export type Organization = {
 };
 
 export type AdminOrgInput = {
+  orgCode: string;
   name: string;
   type: OrgType;
   contactNote?: string;
@@ -178,7 +180,7 @@ export const isSortKey = (value: unknown): value is SortKey =>
 export type SearchQuery = {
   q: string;
   category: ItemCategory | '';
-  status: '' | 'active' | 'sold';
+  conditionRank: ConditionRank | '';
   minPrice: string;
   maxPrice: string;
   sort: SortKey;
@@ -187,7 +189,7 @@ export type SearchQuery = {
 export const EMPTY_QUERY: SearchQuery = {
   q: '',
   category: '',
-  status: '',
+  conditionRank: '',
   minPrice: '',
   maxPrice: '',
   sort: 'end_asc',

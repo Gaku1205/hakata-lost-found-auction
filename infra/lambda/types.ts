@@ -30,6 +30,8 @@ export const isOrgType = (value: unknown): value is OrgType =>
 
 export type Organization = {
   orgId: string;
+  // 整理番号に使う短い英数字コード（例: JRH）。出品元登録時に運営が割り当てる。
+  orgCode: string;
   name: string;
   type: OrgType;
   contactNote?: string;
@@ -39,6 +41,7 @@ export type Organization = {
 };
 
 export type AdminOrgInput = {
+  orgCode: string;
   name: string;
   type: OrgType;
   contactNote?: string;

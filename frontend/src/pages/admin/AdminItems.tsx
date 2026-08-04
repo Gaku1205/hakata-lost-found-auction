@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   ApiError,
   adminCloseItem,
   adminCompletePickup,
   adminDeleteItem,
+  adminListOrganizations,
   fetchItems,
 } from '../../api';
 import { Pagination } from '../../components/Pagination';
@@ -12,7 +13,7 @@ import { ItemListTabsNav } from '../../components/ItemListTabsNav';
 import { handoverStatus, yen } from '../../format';
 import { useLoadable } from '../../hooks';
 import { ITEM_LIST_PAGE_SIZE, countByTab, matchesItemListTab, type ItemListTab } from '../../itemListTabs';
-import type { LostItem } from '../../types';
+import type { LostItem, Organization } from '../../types';
 import { CATEGORY_LABELS } from '../../types';
 import { AdminTabs } from './AdminTabs';
 
@@ -68,6 +69,8 @@ const AdminRow = ({ item, showSoldColumns, onChanged, onError }: RowProps): JSX.
         <Link to={`/items/${item.itemId}`}>{item.title}</Link>
         <span className="table-sub">{CATEGORY_LABELS[item.category]}</span>
       </td>
+      <td data-label="整理番号">{item.caseNumber}</td>
+      <td data-label="出品元">{item.orgName}</td>
       <td data-label="状態">
         <span className={`status-chip status-chip--${item.status}`}>
           {item.status === 'active' ? '販売中' : '落札済み'}
@@ -124,23 +127,15 @@ const AdminRow = ({ item, showSoldColumns, onChanged, onError }: RowProps): JSX.
       <td data-label="操作">
         <div className="table-actions">
           {item.status === 'active' ? (
-            <>
-              <Link
-                className="btn btn--ghost btn--small"
-                to={`/admin/items/${item.itemId}/edit`}
-              >
-                編集
-              </Link>
-              <button
-                type="button"
-                className="btn btn--ghost btn--small"
-                disabled={busy || item.bidCount === 0}
-                title={item.bidCount === 0 ? '入札がないため終了できません' : undefined}
-                onClick={handleClose}
-              >
-                終了（落札確定）
-              </button>
-            </>
+            <button
+              type="button"
+              className="btn btn--ghost btn--small"
+              disabled={busy || item.bidCount === 0}
+              title={item.bidCount === 0 ? '入札がないため終了できません' : undefined}
+              onClick={handleClose}
+            >
+              終了（落札確定）
+            </button>
           ) : null}
           <button
             type="button"
@@ -158,16 +153,36 @@ const AdminRow = ({ item, showSoldColumns, onChanged, onError }: RowProps): JSX.
 
 export const AdminItems = (): JSX.Element => {
   const [result, reload] = useLoadable(() => fetchItems(), []);
+  const [orgsResult] = useLoadable(() => adminListOrganizations(), []);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [actionError, setActionError] = useState<string | null>(null);
   const [tab, setTab] = useState<ItemListTab>('all');
   const [page, setPage] = useState(1);
+  const [searchText, setSearchText] = useState('');
+  const [orgFilter, setOrgFilter] = useState(searchParams.get('orgId') ?? '');
+
+  // 出品元管理画面から「この出品元の商品一覧を見る」で遷移してきた場合にURLのorgIdを反映する
+  useEffect(() => {
+    setOrgFilter(searchParams.get('orgId') ?? '');
+  }, [searchParams]);
+
+  const organizations: Organization[] =
+    orgsResult.state === 'ready' ? orgsResult.data.organizations : [];
 
   const allItems = result.state === 'ready' ? result.data.items : [];
   const counts = useMemo(() => countByTab(allItems), [allItems]);
-  const filteredItems = useMemo(
-    () => allItems.filter((item) => matchesItemListTab(item, tab)),
-    [allItems, tab],
-  );
+  const filteredItems = useMemo(() => {
+    const query = searchText.trim().toLowerCase();
+    return allItems.filter((item) => {
+      if (!matchesItemListTab(item, tab)) return false;
+      if (orgFilter !== '' && item.orgId !== orgFilter) return false;
+      if (query !== '') {
+        const haystack = `${item.caseNumber} ${item.title}`.toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [allItems, tab, orgFilter, searchText]);
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / ITEM_LIST_PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const pageItems = filteredItems.slice(
@@ -181,20 +196,54 @@ export const AdminItems = (): JSX.Element => {
     setPage(1);
   };
 
+  const changeOrgFilter = (value: string): void => {
+    setOrgFilter(value);
+    setPage(1);
+    setSearchParams(value === '' ? {} : { orgId: value });
+  };
+
   return (
     <div className="container section">
       <div className="admin-head">
         <div>
           <h1 className="page-title">管理画面 — 出品管理</h1>
           <p className="page-lead">
-            出品の作成・編集・落札確定・受け渡し処理を行います（運営担当者専用）。
+            出品の落札確定・キャンセル・受け渡し処理を行います（運営担当者専用）。出品の作成・編集は各出品元が行います。
           </p>
         </div>
-        <Link className="btn btn--primary btn--fit" to="/admin/items/new">
-          ＋ 新規出品
-        </Link>
       </div>
       <AdminTabs />
+
+      <div className="form-grid">
+        <div className="field">
+          <label htmlFor="admin-items-search">整理番号・品名で検索</label>
+          <input
+            id="admin-items-search"
+            type="text"
+            placeholder="例: JRH-20260401-1234"
+            value={searchText}
+            onChange={(e) => {
+              setSearchText(e.target.value);
+              setPage(1);
+            }}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="admin-items-org">出品元で絞り込み</label>
+          <select
+            id="admin-items-org"
+            value={orgFilter}
+            onChange={(e) => changeOrgFilter(e.target.value)}
+          >
+            <option value="">すべての出品元</option>
+            {organizations.map((org) => (
+              <option key={org.orgId} value={org.orgId}>
+                {org.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
 
       {actionError !== null ? (
         <div className="notice notice--error" role="alert">
@@ -239,6 +288,8 @@ export const AdminItems = (): JSX.Element => {
                   <thead>
                     <tr>
                       <th>品名</th>
+                      <th>整理番号</th>
+                      <th>出品元</th>
                       <th>状態</th>
                       <th>現在価格</th>
                       <th>入札</th>

@@ -335,7 +335,8 @@ export class MeguriMonoStack extends cdk.Stack {
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       'font-src https://fonts.gstatic.com',
       "img-src 'self' data: blob:",
-      `connect-src 'self' https://cognito-idp.${this.region}.amazonaws.com`,
+      // 商品画像は署名付きURLでブラウザからS3へ直接PUTするため、画像バケットのオリジンを許可する
+      `connect-src 'self' https://cognito-idp.${this.region}.amazonaws.com https://${imagesBucket.bucketName}.s3.${this.region}.amazonaws.com`,
       "object-src 'none'",
       "base-uri 'self'",
       "frame-ancestors 'none'",

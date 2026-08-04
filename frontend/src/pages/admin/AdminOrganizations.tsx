@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   ApiError,
   adminCreateOrganization,
@@ -96,12 +97,15 @@ const OrgLoginCell = ({
 };
 
 type FormState = {
+  orgCode: string;
   name: string;
   type: OrgType;
   contactNote: string;
 };
 
-const INITIAL_FORM: FormState = { name: '', type: 'police', contactNote: '' };
+const INITIAL_FORM: FormState = { orgCode: '', name: '', type: 'police', contactNote: '' };
+
+const ORG_CODE_PATTERN = /^[A-Z0-9]{2,6}$/;
 
 export const AdminOrganizations = (): JSX.Element => {
   const [result, reload] = useLoadable(() => adminListOrganizations(), []);
@@ -116,8 +120,14 @@ export const AdminOrganizations = (): JSX.Element => {
       setError('出品元名を入力してください');
       return;
     }
+    const orgCode = form.orgCode.trim().toUpperCase();
+    if (!ORG_CODE_PATTERN.test(orgCode)) {
+      setError('出品元コードは英大文字・数字2〜6文字で入力してください（例: JRH）');
+      return;
+    }
     setSubmitting(true);
     adminCreateOrganization({
+      orgCode,
       name: form.name.trim(),
       type: form.type,
       contactNote: form.contactNote.trim() === '' ? undefined : form.contactNote.trim(),
@@ -147,6 +157,21 @@ export const AdminOrganizations = (): JSX.Element => {
       <div className="admin-org-layout">
         <form className="admin-org-form" onSubmit={handleSubmit} noValidate>
           <h2 className="panel__heading">＋ 出品元を追加</h2>
+          <div className="field">
+            <label htmlFor="org-code">出品元コード</label>
+            <input
+              id="org-code"
+              type="text"
+              maxLength={6}
+              placeholder="例: JRH"
+              value={form.orgCode}
+              onChange={(e) => setForm((f) => ({ ...f, orgCode: e.target.value.toUpperCase() }))}
+              required
+            />
+            <p className="field__help">
+              英大文字・数字2〜6文字。整理番号（例: JRH-20260401-1234）の先頭に使われます。
+            </p>
+          </div>
           <div className="field">
             <label htmlFor="org-name">出品元名</label>
             <input
@@ -214,15 +239,18 @@ export const AdminOrganizations = (): JSX.Element => {
             <table className="admin-table">
               <thead>
                 <tr>
+                  <th>コード</th>
                   <th>出品元名</th>
                   <th>種別</th>
                   <th>登録日</th>
                   <th>ログイン</th>
+                  <th>出品</th>
                 </tr>
               </thead>
               <tbody>
                 {result.data.organizations.map((org) => (
                   <tr key={org.orgId}>
+                    <td data-label="コード">{org.orgCode}</td>
                     <td data-label="出品元名">{org.name}</td>
                     <td data-label="種別">
                       <span className={`org-badge org-badge--${org.type}`}>
@@ -232,6 +260,14 @@ export const AdminOrganizations = (): JSX.Element => {
                     <td data-label="登録日">{formatDate(org.createdAt.slice(0, 10))}</td>
                     <td data-label="ログイン">
                       <OrgLoginCell organization={org} onProvisioned={reload} />
+                    </td>
+                    <td data-label="出品">
+                      <Link
+                        className="btn btn--ghost btn--small"
+                        to={`/admin?orgId=${encodeURIComponent(org.orgId)}`}
+                      >
+                        商品一覧を見る
+                      </Link>
                     </td>
                   </tr>
                 ))}

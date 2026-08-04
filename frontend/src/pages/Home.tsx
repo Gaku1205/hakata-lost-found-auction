@@ -7,20 +7,23 @@ import type { ItemCategory, SearchQuery } from '../types';
 import {
   CATEGORY_LABELS,
   CATEGORY_ORDER,
+  CONDITION_LABELS,
+  CONDITION_ORDER,
   EMPTY_QUERY,
   SORT_OPTIONS,
+  isConditionRank,
   isItemCategory,
   isSortKey,
 } from '../types';
 
 const queryFromParams = (params: URLSearchParams): SearchQuery => {
   const category = params.get('category');
-  const status = params.get('status');
+  const conditionRank = params.get('conditionRank');
   const sort = params.get('sort');
   return {
     q: params.get('q') ?? '',
     category: isItemCategory(category) ? category : '',
-    status: status === 'active' || status === 'sold' ? status : '',
+    conditionRank: isConditionRank(conditionRank) ? conditionRank : '',
     minPrice: params.get('minPrice') ?? '',
     maxPrice: params.get('maxPrice') ?? '',
     sort: isSortKey(sort) ? sort : 'end_asc',
@@ -31,7 +34,7 @@ const paramsFromQuery = (query: SearchQuery): URLSearchParams => {
   const params = new URLSearchParams();
   if (query.q !== '') params.set('q', query.q);
   if (query.category !== '') params.set('category', query.category);
-  if (query.status !== '') params.set('status', query.status);
+  if (query.conditionRank !== '') params.set('conditionRank', query.conditionRank);
   if (query.minPrice !== '') params.set('minPrice', query.minPrice);
   if (query.maxPrice !== '') params.set('maxPrice', query.maxPrice);
   if (query.sort !== 'end_asc') params.set('sort', query.sort);
@@ -41,7 +44,7 @@ const paramsFromQuery = (query: SearchQuery): URLSearchParams => {
 const hasActiveFilter = (query: SearchQuery): boolean =>
   query.q !== '' ||
   query.category !== '' ||
-  query.status !== '' ||
+  query.conditionRank !== '' ||
   query.minPrice !== '' ||
   query.maxPrice !== '' ||
   query.sort !== 'end_asc';
@@ -92,13 +95,16 @@ export const Home = (): JSX.Element => {
   const nowMs = useNow();
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const totalItems = result.state === 'ready' ? result.data.items.length : 0;
+  // 一般向けの一覧なので、落札済みは載せず販売中のものだけを表示する
+  const activeItems = useMemo(() => {
+    if (result.state !== 'ready') return [];
+    return result.data.items.filter((item) => item.status === 'active');
+  }, [result]);
+
+  const totalItems = activeItems.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
   const page = Math.min(pageFromParams(searchParams), totalPages);
-  const pageItems =
-    result.state === 'ready'
-      ? result.data.items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
-      : [];
+  const pageItems = activeItems.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const goToPage = (nextPage: number): void => {
     const next = new URLSearchParams(searchParams);
@@ -172,23 +178,26 @@ export const Home = (): JSX.Element => {
               />
             </div>
             <div className="search-bar__selects">
-              <label className="sr-only" htmlFor="search-status">
-                販売状況
+              <label className="sr-only" htmlFor="search-condition">
+                商品の状態
               </label>
               <select
-                id="search-status"
-                value={query.status}
+                id="search-condition"
+                value={query.conditionRank}
                 onChange={(e) => {
                   const value = e.target.value;
                   applyQuery({
                     ...query,
-                    status: value === 'active' || value === 'sold' ? value : '',
+                    conditionRank: isConditionRank(value) ? value : '',
                   });
                 }}
               >
-                <option value="">すべての状況</option>
-                <option value="active">販売中のみ</option>
-                <option value="sold">落札済みのみ</option>
+                <option value="">すべての状態</option>
+                {CONDITION_ORDER.map((rank) => (
+                  <option key={rank} value={rank}>
+                    {CONDITION_LABELS[rank]}
+                  </option>
+                ))}
               </select>
               <label className="sr-only" htmlFor="search-sort">
                 並び替え
@@ -254,7 +263,7 @@ export const Home = (): JSX.Element => {
           <>
             <div className="result-row">
               <p className="result-count" aria-live="polite">
-                {result.data.items.length}件の出品
+                {totalItems}件の出品
                 {totalPages > 1
                   ? `（${(page - 1) * PAGE_SIZE + 1}〜${Math.min(page * PAGE_SIZE, totalItems)}件を表示）`
                   : ''}
@@ -274,7 +283,7 @@ export const Home = (): JSX.Element => {
                 <ItemCard key={item.itemId} item={item} nowMs={nowMs} index={index} />
               ))}
             </div>
-            {result.data.items.length === 0 ? (
+            {totalItems === 0 ? (
               <p className="empty">条件に合う出品が見つかりません。条件を変えてお試しください。</p>
             ) : null}
             {totalPages > 1 ? (

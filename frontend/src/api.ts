@@ -157,6 +157,7 @@ const isPaymentResponse = (value: unknown): value is PaymentResponse =>
 const isOrganization = (value: unknown): value is Organization =>
   isRecord(value) &&
   typeof value.orgId === 'string' &&
+  typeof value.orgCode === 'string' &&
   typeof value.name === 'string' &&
   isOrgType(value.type) &&
   typeof value.createdAt === 'string';
@@ -261,7 +262,7 @@ export const buildSearchParams = (query: SearchQuery): string => {
   const params = new URLSearchParams();
   if (query.q !== '') params.set('q', query.q);
   if (query.category !== '') params.set('category', query.category);
-  if (query.status !== '') params.set('status', query.status);
+  if (query.conditionRank !== '') params.set('conditionRank', query.conditionRank);
   if (query.minPrice !== '') params.set('minPrice', query.minPrice);
   if (query.maxPrice !== '') params.set('maxPrice', query.maxPrice);
   if (query.sort !== 'end_asc') params.set('sort', query.sort);
@@ -346,6 +347,11 @@ export const orgUpdateItem = (
     jsonInit('PUT', input),
   );
 
+export const orgCancelItem = (itemId: string): Promise<unknown> =>
+  request(`/api/org/items/${encodeURIComponent(itemId)}`, isAnything, {
+    method: 'DELETE',
+  });
+
 export const orgRequestImageUploadUrl = (
   itemId: string,
   contentType: string,
@@ -390,22 +396,6 @@ export const postPickupSelfComplete = (itemId: string): Promise<PickupCompleteRe
   );
 
 // ---------- 管理者 ----------
-
-export const adminCreateItem = (
-  input: AdminItemInput,
-  orgId: string,
-): Promise<ItemResponse> =>
-  request('/api/admin/items', isItemResponse, jsonInit('POST', { ...input, orgId }));
-
-export const adminUpdateItem = (
-  itemId: string,
-  input: AdminItemInput,
-): Promise<ItemResponse> =>
-  request(
-    `/api/admin/items/${encodeURIComponent(itemId)}`,
-    isItemResponse,
-    jsonInit('PUT', input),
-  );
 
 export const adminCloseItem = (itemId: string): Promise<ItemResponse> =>
   request(`/api/admin/items/${encodeURIComponent(itemId)}/close`, isItemResponse, {

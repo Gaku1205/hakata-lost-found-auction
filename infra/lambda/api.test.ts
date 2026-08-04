@@ -11,6 +11,7 @@ process.env.USER_POOL_CLIENT_ID ??= 'test-client-id';
 
 const api: typeof import('./api') = require('./api');
 const {
+  checkOrgCancelEligibility,
   compareBySort,
   finalizeSoldItem,
   generateBoxNumber,
@@ -22,6 +23,7 @@ const {
 
 const POLICE_ORG: Organization = {
   orgId: 'org-fukuoka-police',
+  orgCode: 'FKP',
   name: '福岡県警察',
   type: 'police',
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -29,6 +31,7 @@ const POLICE_ORG: Organization = {
 
 const CORPORATE_ORG: Organization = {
   orgId: 'org-jr-hakata',
+  orgCode: 'JRH',
   name: 'JR博多シティ',
   type: 'corporate',
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -50,7 +53,7 @@ const makeItem = (overrides: Partial<LostItem> = {}): LostItem => ({
   conditionRank: 'good',
   quantity: 1,
   foundDate: '2026-03-01',
-  caseNumber: '福岡県警察 遺失物第8-1234号',
+  caseNumber: 'FKP-20260301-1234',
   noticeDate: '2026-03-08',
   custodyEndDate: '2026-09-01',
   orgId: POLICE_ORG.orgId,
@@ -79,14 +82,14 @@ test('hashString は非負整数を返す', () => {
   assert.ok(hashString('any-value') >= 0);
 });
 
-test('generateCaseNumber: 警察・自治体は「遺失物第X号」形式になる', () => {
+test('generateCaseNumber: 出品元コード-拾得日(YYYYMMDD)-4桁 の形式になる', () => {
   const caseNumber = generateCaseNumber(POLICE_ORG, 'i-001', '2026-04-12');
-  assert.match(caseNumber, /^福岡県警察 遺失物第8-\d{4}号$/);
+  assert.match(caseNumber, /^FKP-20260412-\d{4}$/);
 });
 
-test('generateCaseNumber: 企業は「拾得物管理番号」形式になる', () => {
+test('generateCaseNumber: 出品元コードが変われば先頭も変わる', () => {
   const caseNumber = generateCaseNumber(CORPORATE_ORG, 'i-001', '2026-04-12');
-  assert.match(caseNumber, /^JR博多シティ 拾得物管理番号 2026-\d{4}$/);
+  assert.match(caseNumber, /^JRH-20260412-\d{4}$/);
 });
 
 test('generateCaseNumber: 同じitemIdなら常に同じ整理番号になる', () => {
@@ -109,6 +112,7 @@ test('parseSearchQuery: パラメータなしはデフォルト値になる', ()
     q: '',
     category: '',
     status: '',
+    conditionRank: '',
     minPrice: null,
     maxPrice: null,
     sort: 'end_asc',
@@ -120,6 +124,7 @@ test('parseSearchQuery: 有効なパラメータを取り込む', () => {
     q: '  博多駅 傘  ',
     category: 'umbrella',
     status: 'active',
+    conditionRank: 'good',
     minPrice: '100',
     maxPrice: '5000',
     sort: 'price_desc',
@@ -127,6 +132,7 @@ test('parseSearchQuery: 有効なパラメータを取り込む', () => {
   assert.equal(query.q, '博多駅 傘');
   assert.equal(query.category, 'umbrella');
   assert.equal(query.status, 'active');
+  assert.equal(query.conditionRank, 'good');
   assert.equal(query.minPrice, 100);
   assert.equal(query.maxPrice, 5000);
   assert.equal(query.sort, 'price_desc');
@@ -218,4 +224,93 @@ test('parseBody: 不正なJSONは null になる', () => {
 
 test('parseBody: bodyがnullなら null になる', () => {
   assert.equal(parseBody(null), null);
+});
+
+test('checkOrgCancelEligibility: 入札0件・残り1時間超なら許可', () => {
+  const item = makeItem({
+    orgId: 'org-a',
+    status: 'active',
+    bidCount: 0,
+    endTime: '2026-04-01T02:00:00.000Z',
+  });
+  const now = new Date('2026-04-01T00:00:00.000Z');
+  assert.deepEqual(checkOrgCancelEligibility(item, 'org-a', now), { allowed: true });
+});
+
+test('checkOrgCancelEligibility: 残り時間がちょうど1時間なら拒否（境界値）', () => {
+  const item = makeItem({
+    orgId: 'org-a',
+    status: 'active',
+    bidCount: 0,
+    endTime: '2026-04-01T01:00:00.000Z',
+  });
+  const now = new Date('2026-04-01T00:00:00.000Z');
+  const result = checkOrgCancelEligibility(item, 'org-a', now);
+  assert.equal(result.allowed, false);
+  assert.equal(!result.allowed && result.status, 409);
+  assert.equal(!result.allowed && result.message, '終了1時間前を切った出品はキャンセルできません');
+});
+
+test('checkOrgCancelEligibility: 終了1時間前を切っていれば409で拒否', () => {
+  const item = makeItem({
+    orgId: 'org-a',
+    status: 'active',
+    bidCount: 0,
+    endTime: '2026-04-01T00:30:00.000Z',
+  });
+  const now = new Date('2026-04-01T00:00:00.000Z');
+  const result = checkOrgCancelEligibility(item, 'org-a', now);
+  assert.equal(result.allowed, false);
+  assert.equal(!result.allowed && result.status, 409);
+});
+
+test('checkOrgCancelEligibility: 既に終了時刻を過ぎ入札ゼロのまま残っていれば409で拒否', () => {
+  const item = makeItem({
+    orgId: 'org-a',
+    status: 'active',
+    bidCount: 0,
+    endTime: '2026-03-01T00:00:00.000Z',
+  });
+  const now = new Date('2026-04-01T00:00:00.000Z');
+  const result = checkOrgCancelEligibility(item, 'org-a', now);
+  assert.equal(result.allowed, false);
+  assert.equal(!result.allowed && result.status, 409);
+});
+
+test('checkOrgCancelEligibility: 他の出品元の商品は403で拒否', () => {
+  const item = makeItem({ orgId: 'org-a', bidCount: 0, endTime: '2026-04-01T02:00:00.000Z' });
+  const now = new Date('2026-04-01T00:00:00.000Z');
+  const result = checkOrgCancelEligibility(item, 'org-b', now);
+  assert.deepEqual(result, {
+    allowed: false,
+    status: 403,
+    message: 'この出品元が登録した商品ではありません',
+  });
+});
+
+test('checkOrgCancelEligibility: 落札済み(sold)は409で拒否', () => {
+  const item = makeItem({
+    orgId: 'org-a',
+    status: 'sold',
+    bidCount: 0,
+    endTime: '2026-04-01T02:00:00.000Z',
+  });
+  const now = new Date('2026-04-01T00:00:00.000Z');
+  const result = checkOrgCancelEligibility(item, 'org-a', now);
+  assert.equal(result.allowed, false);
+  assert.equal(!result.allowed && result.status, 409);
+});
+
+test('checkOrgCancelEligibility: 入札が1件でもあれば409で拒否', () => {
+  const item = makeItem({
+    orgId: 'org-a',
+    status: 'active',
+    bidCount: 1,
+    endTime: '2026-04-01T02:00:00.000Z',
+  });
+  const now = new Date('2026-04-01T00:00:00.000Z');
+  const result = checkOrgCancelEligibility(item, 'org-a', now);
+  assert.equal(result.allowed, false);
+  assert.equal(!result.allowed && result.status, 409);
+  assert.equal(!result.allowed && result.message, '入札がある出品はキャンセルできません');
 });

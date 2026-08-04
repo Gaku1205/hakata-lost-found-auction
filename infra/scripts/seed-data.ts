@@ -187,12 +187,8 @@ const hashString = (value: string): number => {
 
 const generateCaseNumber = (org: Organization, itemId: string, foundDate: string): string => {
   const seq = (hashString(itemId) % 9000) + 1000;
-  if (org.type === 'police') {
-    const reiwaYear = new Date(foundDate).getFullYear() - 2018;
-    return `${org.name} 遺失物第${reiwaYear}-${seq}号`;
-  }
-  const year = new Date(foundDate).getFullYear();
-  return `${org.name} 拾得物管理番号 ${year}-${seq}`;
+  const yyyymmdd = foundDate.replaceAll('-', '');
+  return `${org.orgCode}-${yyyymmdd}-${seq}`;
 };
 
 const generateBoxNumber = (itemId: string): number => (hashString(`box-${itemId}`) % 24) + 1;
@@ -202,6 +198,7 @@ const generateBoxNumber = (itemId: string): number => (hashString(`box-${itemId}
 const ORGANIZATIONS: readonly Organization[] = [
   {
     orgId: 'org-fukuoka-police',
+    orgCode: 'FKP',
     name: '福岡県警察',
     type: 'police',
     contactNote: '福岡県警察本部 遺失物センター（運営代理登録）',
@@ -209,6 +206,7 @@ const ORGANIZATIONS: readonly Organization[] = [
   },
   {
     orgId: 'org-jr-hakata',
+    orgCode: 'JRH',
     name: 'JR博多シティ',
     type: 'corporate',
     contactNote: '博多駅 総合案内所 担当者確認済み（運営代理登録）',
@@ -216,6 +214,7 @@ const ORGANIZATIONS: readonly Organization[] = [
   },
   {
     orgId: 'org-canal-city',
+    orgCode: 'CCH',
     name: 'キャナルシティ博多',
     type: 'corporate',
     contactNote: '施設管理事務所 担当者確認済み（運営代理登録）',

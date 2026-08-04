@@ -30,7 +30,6 @@ type FormState = {
   category: ItemCategory;
   description: string;
   foundLocation: string;
-  foundMonth: string;
   pickupLocation: string;
   startPrice: string;
   endTimeLocal: string;
@@ -67,7 +66,6 @@ const INITIAL_FORM: FormState = {
   category: 'umbrella',
   description: '',
   foundLocation: '',
-  foundMonth: '2026-06',
   pickupLocation: PICKUP_LOCATION_PRESETS[0] ?? '',
   startPrice: '100',
   endTimeLocal: defaultEndTimeLocal(),
@@ -109,7 +107,6 @@ export const OrgItemForm = (): JSX.Element => {
           category: item.category,
           description: item.description,
           foundLocation: item.foundLocation,
-          foundMonth: item.foundMonth,
           pickupLocation: item.pickupLocation ?? PICKUP_LOCATION_PRESETS[0] ?? '',
           startPrice: String(item.startPrice),
           endTimeLocal: isoToLocalInput(item.endTime),
@@ -279,7 +276,9 @@ export const OrgItemForm = (): JSX.Element => {
       category: form.category,
       description: form.description,
       foundLocation: form.foundLocation,
-      foundMonth: form.foundMonth,
+      // 「拾得時期」は表示専用の項目で、担当者に別途入力させると拾得日とズレうるため、
+      // 拾得日（正確な日付、公告日・保管期間満了日・整理番号の年部分の算出元）から自動算出する。
+      foundMonth: form.foundDate.slice(0, 7),
       pickupLocation: form.pickupLocation,
       startPrice,
       endTime: endDate.toISOString(),
@@ -471,34 +470,22 @@ export const OrgItemForm = (): JSX.Element => {
             </p>
           </div>
 
-          <div className="form-grid">
-            <div className="field">
-              <label htmlFor="form-category">カテゴリ</label>
-              <select
-                id="form-category"
-                value={form.category}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (isItemCategory(value)) set('category', value);
-                }}
-              >
-                {CATEGORY_ORDER.map((category) => (
-                  <option key={category} value={category}>
-                    {CATEGORY_LABELS[category]}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="form-found-month">拾得時期</label>
-              <input
-                id="form-found-month"
-                type="month"
-                value={form.foundMonth}
-                onChange={(e) => set('foundMonth', e.target.value)}
-                required
-              />
-            </div>
+          <div className="field">
+            <label htmlFor="form-category">カテゴリ</label>
+            <select
+              id="form-category"
+              value={form.category}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (isItemCategory(value)) set('category', value);
+              }}
+            >
+              {CATEGORY_ORDER.map((category) => (
+                <option key={category} value={category}>
+                  {CATEGORY_LABELS[category]}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="form-grid">
@@ -545,7 +532,7 @@ export const OrgItemForm = (): JSX.Element => {
               required
             />
             <p className="field__help">
-              公告日・保管期間満了日・整理番号は拾得日から自動的に算出されます
+              公告日・保管期間満了日・拾得時期の表示は拾得日から自動的に算出されます。整理番号は出品IDと拾得日（年）をもとに自動採番されます
             </p>
           </div>
 

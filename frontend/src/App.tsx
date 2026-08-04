@@ -5,7 +5,6 @@ import { RequireAdmin, RequireAuth, RequireOrg } from './components/RequireAdmin
 import { AdminCloudFormation } from './pages/admin/AdminCloudFormation';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { AdminInquiries } from './pages/admin/AdminInquiries';
-import { AdminItemForm } from './pages/admin/AdminItemForm';
 import { AdminItems } from './pages/admin/AdminItems';
 import { AdminOrganizations } from './pages/admin/AdminOrganizations';
 import { AdminPartnerApplications } from './pages/admin/AdminPartnerApplications';
@@ -350,22 +349,6 @@ export const App = (): JSX.Element => (
           element={
             <RequireAdmin>
               <AdminInquiries />
-            </RequireAdmin>
-          }
-        />
-        <Route
-          path="/admin/items/new"
-          element={
-            <RequireAdmin>
-              <AdminItemForm />
-            </RequireAdmin>
-          }
-        />
-        <Route
-          path="/admin/items/:itemId/edit"
-          element={
-            <RequireAdmin>
-              <AdminItemForm />
             </RequireAdmin>
           }
         />

@@ -77,6 +77,9 @@ const MAX_BID_INCREMENT = 50_000; // 1回の入札で上乗せできる最大額
 const RAPID_BID_COUNT = 5; // この件数が
 const RAPID_BID_WINDOW_MS = 10 * 60 * 1000; // この時間内にあれば連続入札フラグ
 
+// 出品元による出品キャンセル（入札0件なら許可。ただしこの時間を切ったら不可）
+const CANCEL_WINDOW_MS = 60 * 60 * 1000;
+
 const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
   marshallOptions: { removeUndefinedValues: true },
 });
@@ -112,6 +115,7 @@ export const isOrganization = (value: unknown): value is Organization => {
   if (!isRecord(value)) return false;
   return (
     typeof value['orgId'] === 'string' &&
+    typeof value['orgCode'] === 'string' &&
     typeof value['name'] === 'string' &&
     typeof value['type'] === 'string'
   );
@@ -188,6 +192,7 @@ type SearchQuery = {
   q: string;
   category: string;
   status: string;
+  conditionRank: string;
   minPrice: number | null;
   maxPrice: number | null;
   sort: SortKey;
@@ -210,6 +215,7 @@ export const parseSearchQuery = (
     q: get('q').toLowerCase(),
     category: get('category'),
     status: get('status'),
+    conditionRank: get('conditionRank'),
     minPrice: toPrice(get('minPrice')),
     maxPrice: toPrice(get('maxPrice')),
     sort: isSortKey(sortRaw) ? sortRaw : 'end_asc',
@@ -239,6 +245,7 @@ const getItems = async (
     if (query.category !== '' && item.category !== query.category) return false;
     if (query.status === 'active' && item.status !== 'active') return false;
     if (query.status === 'sold' && item.status !== 'sold') return false;
+    if (query.conditionRank !== '' && item.conditionRank !== query.conditionRank) return false;
     if (query.minPrice !== null && item.currentPrice < query.minPrice) return false;
     if (query.maxPrice !== null && item.currentPrice > query.maxPrice) return false;
     if (query.q !== '') {
@@ -728,16 +735,12 @@ export const hashString = (value: string): number => {
   return hash;
 };
 
-// itemIdから決定的に整理番号を発行する（同じitemIdなら常に同じ番号）
-// 警察・自治体は遺失物法の「遺失物第X号」形式、企業は施設占有者拾得の管理番号形式にする
+// itemIdから決定的に整理番号を発行する（同じitemIdなら常に同じ番号）。
+// 出品元コード + 拾得日(YYYYMMDD) + itemIdから決定的に出す4桁の値、の3つで一意な番号にする。
 export const generateCaseNumber = (org: Organization, itemId: string, foundDate: string): string => {
   const seq = (hashString(itemId) % 9000) + 1000;
-  if (org.type === 'police') {
-    const reiwaYear = new Date(foundDate).getFullYear() - 2018;
-    return `${org.name} 遺失物第${reiwaYear}-${seq}号`;
-  }
-  const year = new Date(foundDate).getFullYear();
-  return `${org.name} 拾得物管理番号 ${year}-${seq}`;
+  const yyyymmdd = foundDate.replaceAll('-', '');
+  return `${org.orgCode}-${yyyymmdd}-${seq}`;
 };
 
 // 受取拠点の無人ボックス番号（1〜24番）をitemIdから決定的に発行する
@@ -848,21 +851,28 @@ const adminListOrganizations = async (): Promise<APIGatewayProxyResult> => {
   return json(200, { organizations });
 };
 
+const ORG_CODE_PATTERN = /^[A-Z0-9]{2,6}$/;
+
 const parseAdminOrgInput = (data: Record<string, unknown>): AdminOrgInput | string => {
   const name = data['name'];
   const type = data['type'];
+  const orgCodeRaw = data['orgCode'];
   const contactNoteRaw = data['contactNote'];
 
   if (typeof name !== 'string' || name.trim() === '' || name.length > 40) {
     return '出品元名は1〜40文字で入力してください';
   }
   if (!isOrgType(type)) return '出品元の種別を選択してください';
+  const orgCode = typeof orgCodeRaw === 'string' ? orgCodeRaw.trim().toUpperCase() : '';
+  if (!ORG_CODE_PATTERN.test(orgCode)) {
+    return '出品元コードは英大文字・数字2〜6文字で入力してください（例: JRH）';
+  }
   const contactNote =
     typeof contactNoteRaw === 'string' && contactNoteRaw.trim() !== ''
       ? contactNoteRaw.trim()
       : undefined;
 
-  return { name: name.trim(), type, contactNote };
+  return { orgCode, name: name.trim(), type, contactNote };
 };
 
 const adminCreateOrganization = async (body: string | null): Promise<APIGatewayProxyResult> => {
@@ -1131,55 +1141,8 @@ const applyItemUpdate = (existing: LostItem, input: AdminItemInput): LostItem =>
   custodyEndDate: addDays(input.foundDate, CUSTODY_PERIOD_DAYS),
 });
 
-const adminCreateItem = async (body: string | null): Promise<APIGatewayProxyResult> => {
-  const data = parseBody(body);
-  if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
-  const input = parseAdminItemInput(data);
-  if (typeof input === 'string') return json(400, { message: input });
-
-  const orgId = data['orgId'];
-  if (typeof orgId !== 'string' || orgId.trim() === '') {
-    return json(400, { message: '出品元を選択してください' });
-  }
-  const orgResult = await doc.send(
-    new GetCommand({ TableName: ORGANIZATIONS_TABLE, Key: { orgId } }),
-  );
-  const org: unknown = orgResult.Item;
-  if (!isOrganization(org)) return json(404, { message: '出品元が見つかりません' });
-
-  const item = buildNewItem(input, org);
-  await doc.send(new PutCommand({ TableName: ITEMS_TABLE, Item: item }));
-  return json(201, { item });
-};
-
-const adminUpdateItem = async (
-  itemId: string,
-  body: string | null,
-): Promise<APIGatewayProxyResult> => {
-  const data = parseBody(body);
-  if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
-  const input = parseAdminItemInput(data);
-  if (typeof input === 'string') return json(400, { message: input });
-
-  const itemResult = await doc.send(
-    new GetCommand({ TableName: ITEMS_TABLE, Key: { itemId } }),
-  );
-  const existing: unknown = itemResult.Item;
-  if (!isLostItem(existing)) return json(404, { message: '出品が見つかりません' });
-  if (existing.status !== 'active') {
-    return json(409, { message: '終了済みの出品は編集できません' });
-  }
-  if (existing.bidCount > 0 && input.startPrice !== existing.startPrice) {
-    return json(409, { message: '入札がある出品の開始価格は変更できません' });
-  }
-
-  const updated = applyItemUpdate(existing, input);
-  await doc.send(new PutCommand({ TableName: ITEMS_TABLE, Item: updated }));
-  return json(200, { item: updated });
-};
-
-// 出品元(org)アカウント自身による出品の作成・編集。管理者による代理登録（adminCreateItem/adminUpdateItem）と
-// 同じ入力バリデーション・データ形状を使うが、出品元IDはリクエスト値ではなくログインユーザーのorgIdから決める。
+// 出品元(org)アカウント自身による出品の作成・編集。管理者は出品の新規作成・編集はできず、
+// 終了確定・削除（キャンセル）・受け渡し処理など出品後の管理のみを行う。
 const orgCreateItem = async (
   user: AuthUser,
   body: string | null,
@@ -1234,6 +1197,82 @@ const orgUpdateItem = async (
   const updated = applyItemUpdate(existing, input);
   await doc.send(new PutCommand({ TableName: ITEMS_TABLE, Item: updated }));
   return json(200, { item: updated });
+};
+
+export type CancelEligibility =
+  | { allowed: true }
+  | { allowed: false; status: number; message: string };
+
+// 出品元による出品キャンセルが許可されるかどうかの純粋な判定ロジック。
+// 入札が一件もついていない出品は基本的にいつでもキャンセルできるが、終了1時間前を切ると
+// （既に終了時刻を過ぎている場合も含む）自動終了処理と競合しうるためキャンセルできなくする。
+export const checkOrgCancelEligibility = (
+  item: LostItem,
+  orgId: string,
+  now: Date = new Date(),
+): CancelEligibility => {
+  if (item.orgId !== orgId) {
+    return { allowed: false, status: 403, message: 'この出品元が登録した商品ではありません' };
+  }
+  if (item.status !== 'active') {
+    return { allowed: false, status: 409, message: '終了済みの出品はキャンセルできません' };
+  }
+  if (item.bidCount > 0) {
+    return { allowed: false, status: 409, message: '入札がある出品はキャンセルできません' };
+  }
+  const remainingMs = new Date(item.endTime).getTime() - now.getTime();
+  if (remainingMs <= CANCEL_WINDOW_MS) {
+    return { allowed: false, status: 409, message: '終了1時間前を切った出品はキャンセルできません' };
+  }
+  return { allowed: true };
+};
+
+const orgCancelItem = async (user: AuthUser, itemId: string): Promise<APIGatewayProxyResult> => {
+  if (user.orgId === undefined) {
+    return json(403, { message: 'このアカウントには出品元が紐づいていません' });
+  }
+
+  const itemResult = await doc.send(
+    new GetCommand({ TableName: ITEMS_TABLE, Key: { itemId } }),
+  );
+  const existing: unknown = itemResult.Item;
+  if (!isLostItem(existing)) return json(404, { message: '出品が見つかりません' });
+
+  const eligibility = checkOrgCancelEligibility(existing, user.orgId);
+  if (!eligibility.allowed) {
+    return json(eligibility.status, { message: eligibility.message });
+  }
+
+  const bidsResult = await doc.send(
+    new QueryCommand({
+      TableName: BIDS_TABLE,
+      KeyConditionExpression: 'itemId = :id',
+      ExpressionAttributeValues: { ':id': itemId },
+      ProjectionExpression: 'itemId, bidId',
+    }),
+  );
+  const bidKeys = (bidsResult.Items ?? []).filter(
+    (record): record is { itemId: string; bidId: string } =>
+      isRecord(record) && typeof record['bidId'] === 'string',
+  );
+  if (bidKeys.length > 0) {
+    await doc.send(
+      new BatchWriteCommand({
+        RequestItems: {
+          [BIDS_TABLE]: bidKeys.map((key) => ({ DeleteRequest: { Key: key } })),
+        },
+      }),
+    );
+  }
+
+  await doc.send(
+    new BatchWriteCommand({
+      RequestItems: {
+        [ITEMS_TABLE]: [{ DeleteRequest: { Key: { itemId } } }],
+      },
+    }),
+  );
+  return json(200, { cancelled: itemId });
 };
 
 const queryBidsDesc = async (itemId: string, limit: number): Promise<Bid[]> => {
@@ -1883,6 +1922,14 @@ export const handler = async (
       }
       if (
         segments[2] === 'items' &&
+        segments.length === 4 &&
+        segments[3] !== undefined &&
+        method === 'DELETE'
+      ) {
+        return await orgCancelItem(user, decodeURIComponent(segments[3]));
+      }
+      if (
+        segments[2] === 'items' &&
         segments.length === 5 &&
         segments[4] === 'handover' &&
         method === 'POST'
@@ -1977,13 +2024,14 @@ export const handler = async (
         if (inquiryId === undefined) return json(404, { message: 'Not Found' });
         return await adminReplyInquiry(decodeURIComponent(inquiryId), event.body);
       }
-      if (segments[2] === 'items' && segments.length === 3 && method === 'POST') {
-        return await adminCreateItem(event.body);
-      }
       const itemId = segments[3];
-      if (segments[2] === 'items' && segments.length === 4 && itemId !== undefined) {
-        if (method === 'PUT') return await adminUpdateItem(decodeURIComponent(itemId), event.body);
-        if (method === 'DELETE') return await adminDeleteItem(decodeURIComponent(itemId));
+      if (
+        segments[2] === 'items' &&
+        segments.length === 4 &&
+        itemId !== undefined &&
+        method === 'DELETE'
+      ) {
+        return await adminDeleteItem(decodeURIComponent(itemId));
       }
       if (
         segments[2] === 'items' &&

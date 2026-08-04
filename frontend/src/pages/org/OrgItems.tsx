@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ApiError, fetchOrgItems, postOrgHandover } from '../../api';
+import { ApiError, fetchOrgItems, orgCancelItem, postOrgHandover } from '../../api';
 import { ItemListTabsNav } from '../../components/ItemListTabsNav';
 import { Pagination } from '../../components/Pagination';
 import { handoverStatus, yen } from '../../format';
@@ -15,6 +15,15 @@ const endTimeLabel = (iso: string): string => {
   if (Number.isNaN(date.getTime())) return iso;
   return `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 };
+
+// バックエンド（infra/lambda/api.ts の CANCEL_WINDOW_MS）と同じ条件。
+// 入札が一件もついていない出品は基本的にいつでもキャンセルできるが、終了1時間前を切ると
+// （既に終了時刻を過ぎている場合も含む）キャンセルできなくなる。
+const CANCEL_WINDOW_MS = 60 * 60 * 1000;
+const canCancel = (item: LostItem): boolean =>
+  item.status === 'active' &&
+  item.bidCount === 0 &&
+  new Date(item.endTime).getTime() - Date.now() > CANCEL_WINDOW_MS;
 
 type RowProps = {
   item: LostItem;
@@ -38,12 +47,24 @@ const OrgRow = ({ item, showSoldColumns, onChanged, onError }: RowProps): JSX.El
       .finally(() => setBusy(false));
   };
 
+  const handleCancel = (): void => {
+    if (!window.confirm(`「${item.title}」をキャンセルしますか？（この操作は取り消せません）`)) return;
+    setBusy(true);
+    orgCancelItem(item.itemId)
+      .then(() => onChanged())
+      .catch((err: unknown) => {
+        onError(err instanceof ApiError ? err.message : '操作に失敗しました');
+      })
+      .finally(() => setBusy(false));
+  };
+
   return (
     <tr>
       <td data-label="品名">
         <Link to={`/items/${item.itemId}`}>{item.title}</Link>
         <span className="table-sub">{CATEGORY_LABELS[item.category]}</span>
       </td>
+      <td data-label="整理番号">{item.caseNumber}</td>
       <td data-label="状態">
         <span className={`status-chip status-chip--${item.status}`}>
           {isSold ? '落札済み' : '販売中'}
@@ -60,9 +81,21 @@ const OrgRow = ({ item, showSoldColumns, onChanged, onError }: RowProps): JSX.El
         {isSold ? (
           <span className="table-sub">—</span>
         ) : (
-          <Link className="btn btn--ghost btn--small" to={`/org/items/${item.itemId}/edit`}>
-            編集
-          </Link>
+          <div className="table-actions">
+            <Link className="btn btn--ghost btn--small" to={`/org/items/${item.itemId}/edit`}>
+              編集
+            </Link>
+            {canCancel(item) ? (
+              <button
+                type="button"
+                className="btn btn--danger btn--small"
+                disabled={busy}
+                onClick={handleCancel}
+              >
+                キャンセル
+              </button>
+            ) : null}
+          </div>
         )}
       </td>
       {showSoldColumns ? (
@@ -106,13 +139,21 @@ export const OrgItems = (): JSX.Element => {
   const [actionError, setActionError] = useState<string | null>(null);
   const [tab, setTab] = useState<ItemListTab>('all');
   const [page, setPage] = useState(1);
+  const [searchText, setSearchText] = useState('');
 
   const allItems = result.state === 'ready' ? result.data.items : [];
   const counts = useMemo(() => countByTab(allItems), [allItems]);
-  const filteredItems = useMemo(
-    () => allItems.filter((item) => matchesItemListTab(item, tab)),
-    [allItems, tab],
-  );
+  const filteredItems = useMemo(() => {
+    const query = searchText.trim().toLowerCase();
+    return allItems.filter((item) => {
+      if (!matchesItemListTab(item, tab)) return false;
+      if (query !== '') {
+        const haystack = `${item.caseNumber} ${item.title}`.toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [allItems, tab, searchText]);
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / ITEM_LIST_PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const pageItems = filteredItems.slice(
@@ -132,7 +173,7 @@ export const OrgItems = (): JSX.Element => {
         <div>
           <h1 className="page-title">出品元管理画面 — 出品一覧</h1>
           <p className="page-lead">
-            自分の出品元が登録した出品と、その落札・受け渡し状況を確認できます。落札後は受け取り拠点へ現物を納品したら「納品完了にする」を押してください。
+            自分の出品元が登録した出品と、その落札・受け渡し状況を確認できます。落札後は受け取り拠点へ現物を納品したら「納品完了にする」を押してください。入札が一件もついていない出品は、終了1時間前を切るまで「キャンセル」で取り下げられます。
           </p>
         </div>
         <Link className="btn btn--primary btn--fit" to="/org/items/new">
@@ -140,6 +181,20 @@ export const OrgItems = (): JSX.Element => {
         </Link>
       </div>
       <OrgTabs />
+
+      <div className="field">
+        <label htmlFor="org-items-search">整理番号・品名で検索</label>
+        <input
+          id="org-items-search"
+          type="text"
+          placeholder="例: JRH-20260401-1234"
+          value={searchText}
+          onChange={(e) => {
+            setSearchText(e.target.value);
+            setPage(1);
+          }}
+        />
+      </div>
 
       {actionError !== null ? (
         <div className="notice notice--error" role="alert">
@@ -192,6 +247,7 @@ export const OrgItems = (): JSX.Element => {
                     <thead>
                       <tr>
                         <th>品名</th>
+                        <th>整理番号</th>
                         <th>状態</th>
                         <th>現在価格 / 落札価格</th>
                         <th>入札</th>

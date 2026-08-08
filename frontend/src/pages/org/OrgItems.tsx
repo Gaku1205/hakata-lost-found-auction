@@ -243,7 +243,7 @@ export const OrgItems = (): JSX.Element => {
             ) : (
               <>
                 <div className="table-wrap">
-                  <table className="admin-table">
+                  <table className="admin-table admin-table--items">
                     <thead>
                       <tr>
                         <th>品名</th>

@@ -10,6 +10,7 @@ import {
 } from '../../api';
 import { Pagination } from '../../components/Pagination';
 import { ItemListTabsNav } from '../../components/ItemListTabsNav';
+import { QrScannerModal } from '../../components/QrScannerModal';
 import { handoverStatus, yen } from '../../format';
 import { useLoadable } from '../../hooks';
 import { ITEM_LIST_PAGE_SIZE, countByTab, matchesItemListTab, type ItemListTab } from '../../itemListTabs';
@@ -33,6 +34,7 @@ type RowProps = {
 const AdminRow = ({ item, showSoldColumns, onChanged, onError }: RowProps): JSX.Element => {
   const [busy, setBusy] = useState(false);
   const [code, setCode] = useState('');
+  const [scanning, setScanning] = useState(false);
 
   const run = (action: () => Promise<unknown>): void => {
     setBusy(true);
@@ -63,6 +65,28 @@ const AdminRow = ({ item, showSoldColumns, onChanged, onError }: RowProps): JSX.
     run(() => adminCompletePickup(item.itemId, code.trim()));
   };
 
+  const handleScanned = (decodedText: string): void => {
+    setScanning(false);
+    let scannedItemId: string | null = null;
+    let scannedCode: string | null = null;
+    try {
+      const parsed: unknown = JSON.parse(decodedText);
+      if (typeof parsed === 'object' && parsed !== null) {
+        const obj = parsed as { itemId?: unknown; code?: unknown };
+        if (typeof obj.itemId === 'string') scannedItemId = obj.itemId;
+        if (typeof obj.code === 'string') scannedCode = obj.code;
+      }
+    } catch {
+      // JSON以外が読み取れた場合は不一致として扱う
+    }
+    if (scannedItemId !== item.itemId || scannedCode === null) {
+      onError('この出品の受取QRコードではありません。');
+      return;
+    }
+    setCode(scannedCode);
+    run(() => adminCompletePickup(item.itemId, scannedCode));
+  };
+
   return (
     <tr>
       <td data-label="品名">
@@ -90,7 +114,7 @@ const AdminRow = ({ item, showSoldColumns, onChanged, onError }: RowProps): JSX.
           </td>
           <td data-label="受け取り状態">
             {item.status === 'sold' ? (
-              <>
+              <div className="pickup-status-cell">
                 <span className={`status-chip ${handoverStatus(item).chipClass}`}>
                   {handoverStatus(item).label}
                 </span>
@@ -114,10 +138,25 @@ const AdminRow = ({ item, showSoldColumns, onChanged, onError }: RowProps): JSX.
                       <button type="submit" className="btn btn--ghost btn--small" disabled={busy}>
                         照合して完了
                       </button>
+                      <button
+                        type="button"
+                        className="btn btn--ghost btn--small"
+                        disabled={busy}
+                        onClick={() => setScanning(true)}
+                      >
+                        QRスキャン
+                      </button>
                     </form>
+                    {scanning ? (
+                      <QrScannerModal
+                        title="購入者の受取QRコードを読み取ってください"
+                        onDetected={handleScanned}
+                        onClose={() => setScanning(false)}
+                      />
+                    ) : null}
                   </>
                 ) : null}
-              </>
+              </div>
             ) : (
               <span className="table-sub">—</span>
             )}
@@ -284,7 +323,7 @@ export const AdminItems = (): JSX.Element => {
           ) : (
             <>
               <div className="table-wrap">
-                <table className="admin-table">
+                <table className="admin-table admin-table--items">
                   <thead>
                     <tr>
                       <th>品名</th>

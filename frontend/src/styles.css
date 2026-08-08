@@ -456,6 +456,33 @@ button {
   font-weight: 500;
 }
 
+/* 遺失物保管票の「整理番号」を写真の角に添える控え札 */
+.card__case-tag {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px 3px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--c-border);
+  color: var(--c-sub);
+  font-size: 10.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.card__case-tag-hole {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--c-ink-strong);
+  flex-shrink: 0;
+}
+
 .card__time-pill--urgent {
   background: var(--c-amber);
   border-color: var(--c-amber);
@@ -492,9 +519,11 @@ button {
   flex-direction: column;
   gap: 6px;
   padding: 16px;
+  border-top: 1px dashed var(--c-border);
 }
 
 .card__title {
+  font-family: var(--font-serif);
   font-size: 16px;
   font-weight: 700;
   line-height: 1.5;
@@ -815,24 +844,41 @@ button {
   font-size: 13px;
 }
 
+/* 商品カードの控え札(整理番号)を受け取った、実物の保管票としての意匠 */
 .legal-panel {
-  padding: 16px 18px;
+  padding: 18px 20px 16px;
   border-radius: var(--radius);
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
+  background: var(--c-tag);
+  border: 1px solid var(--c-tag-edge);
 }
 
 .legal-panel__heading {
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 700;
-  color: var(--c-ink-strong);
-  margin-bottom: 4px;
+  letter-spacing: 0.1em;
+  color: var(--c-tag-sub);
+}
+
+.legal-panel .meta {
+  margin-top: 10px;
+  border-top: 1px dashed var(--c-tag-edge);
+}
+
+.legal-panel .meta__row {
+  border-bottom: none;
+  color: var(--c-tag-ink);
+}
+
+.legal-panel .meta__row dt {
+  color: var(--c-tag-sub);
 }
 
 .legal-panel__note {
-  margin-top: 10px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--c-tag-edge);
   font-size: 12px;
-  color: var(--c-sub);
+  color: var(--c-tag-sub);
 }
 
 .detail__side .panel {
@@ -1070,7 +1116,32 @@ button {
 }
 
 .bid-list__name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 700;
+}
+
+.bid-list__row--top {
+  background: var(--c-amber-soft);
+  margin-inline: -14px;
+  padding-inline: 14px;
+  border-radius: var(--radius-sm);
+  border-bottom-color: transparent;
+}
+
+.bid-list__top-badge {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--c-amber);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.bid-list__row--top .bid-list__amount {
+  color: var(--c-amber-strong);
 }
 
 .bid-list__amount {
@@ -1648,6 +1719,13 @@ button {
   border-radius: 12px;
   background: var(--c-indigo-tint);
   color: var(--c-indigo);
+  overflow: hidden;
+}
+
+.win-card__media-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .win-card__body {
@@ -1658,6 +1736,7 @@ button {
 }
 
 .win-card__title {
+  font-family: var(--font-serif);
   font-size: 17px;
   font-weight: 700;
 }
@@ -1689,6 +1768,7 @@ button {
   max-width: 320px;
 }
 
+/* 受取コードは購入者本人の「半券」。保管票と同じ紙の意匠で揃える */
 .pickup-panel {
   display: flex;
   flex-direction: column;
@@ -1696,12 +1776,13 @@ button {
   margin-top: 8px;
   padding: 16px;
   border-radius: var(--radius-sm);
-  background: var(--c-indigo-tint);
+  background: var(--c-tag);
+  border: 1px solid var(--c-tag-edge);
 }
 
 .pickup-panel__label {
   font-size: 13px;
-  color: var(--c-sub);
+  color: var(--c-tag-sub);
 }
 
 .pickup-code {
@@ -1709,14 +1790,66 @@ button {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.18em;
-  color: var(--c-indigo-deep);
+  color: var(--c-tag-ink);
   line-height: 1.2;
 }
 
 .pickup-qr {
   border-radius: var(--radius-sm);
-  border: 1px solid var(--c-border);
+  border: 1px solid var(--c-tag-edge);
   background: #fff;
+}
+
+.qr-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.qr-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 360px;
+  padding: 16px;
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
+.qr-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.qr-modal__head .btn {
+  flex-shrink: 0;
+}
+
+.qr-modal__title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.qr-modal__viewport {
+  width: 100%;
+  min-height: 220px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #000;
+}
+
+.qr-modal__hint {
+  font-size: 13px;
+  color: var(--c-sub);
+  text-align: center;
 }
 
 .payment-panel {
@@ -1762,15 +1895,70 @@ button {
   min-width: 0;
 }
 
+.payment-form__remember {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--c-sub);
+}
+
+.saved-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: #fff;
+  border: 1px solid var(--c-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.saved-card__number {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.saved-card__expiry {
+  font-size: 12px;
+  color: var(--c-sub);
+}
+
 .pickup-done {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
   margin-top: 8px;
-  padding: 12px;
+  padding: 12px 16px 12px 12px;
   border-radius: var(--radius-sm);
   background: var(--c-green-soft);
   color: var(--c-green);
   font-size: 14px;
   font-weight: 500;
   width: fit-content;
+}
+
+.pickup-done p + p {
+  margin-top: 4px;
+}
+
+/* トップページの「受付済」印と対になる、旅の締めくくりの印 */
+.pickup-done__stamp {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 2px solid var(--c-green);
+  color: var(--c-green);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  transform: rotate(-10deg);
+  mix-blend-mode: multiply;
 }
 
 /* ---------- 管理画面 ---------- */
@@ -1837,6 +2025,19 @@ button {
   vertical-align: top;
 }
 
+/* 品名・整理番号・出品元など列数の多い一覧（出品管理／出品元の出品一覧）は、
+   table-layout:auto のまま幅100%に収めようとすると日本語が1文字ずつ縦に
+   折り返されてしまう。列を折り返さず横スクロールさせて可読性を保つ。 */
+@media (min-width: 861px) {
+  .admin-table--items td {
+    white-space: nowrap;
+  }
+
+  .admin-table--items .table-sub {
+    white-space: normal;
+  }
+}
+
 .admin-table tr:last-child td {
   border-bottom: none;
 }
@@ -1882,6 +2083,13 @@ button {
   flex-direction: column;
   gap: 6px;
   align-items: stretch;
+}
+
+.pickup-status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
 }
 
 .pickup-verify {
@@ -2276,6 +2484,18 @@ button {
   }
 
   .table-actions {
+    width: 100%;
+  }
+
+  /* 状態チップ＋注記＋照合フォームが並ぶセルは、横並びだと画面幅からはみ出すため
+     ラベルの下にまとめて縦積みする */
+  .admin-table td:has(.pickup-status-cell) {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .pickup-status-cell {
     width: 100%;
   }
 

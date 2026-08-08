@@ -82,7 +82,6 @@ type PickupReservationResponse = {
   pickupCode: string;
   pickupBoxNumber: number;
 };
-type PickupCompleteResponse = { pickupStatus: PickupStatus };
 type PaymentResponse = { paymentStatus: PaymentStatus; paidAt: string };
 type OrganizationsResponse = { organizations: Organization[] };
 type OrganizationResponse = { organization: Organization };
@@ -146,10 +145,6 @@ const isPickupReservationResponse = (value: unknown): value is PickupReservation
   typeof value.pickupDate === 'string' &&
   typeof value.pickupCode === 'string' &&
   typeof value.pickupBoxNumber === 'number';
-
-const isPickupCompleteResponse = (value: unknown): value is PickupCompleteResponse =>
-  isRecord(value) &&
-  (value.pickupStatus === 'reserved' || value.pickupStatus === 'completed');
 
 const isPaymentResponse = (value: unknown): value is PaymentResponse =>
   isRecord(value) && value.paymentStatus === 'paid' && typeof value.paidAt === 'string';
@@ -334,6 +329,25 @@ export const postOrgHandover = (itemId: string): Promise<OrgHandoverResponse> =>
     { method: 'POST' },
   );
 
+type OrgPickupCompleteResponse = { pickupStatus: 'completed'; itemId: string; title: string };
+
+const isOrgPickupCompleteResponse = (value: unknown): value is OrgPickupCompleteResponse =>
+  isRecord(value) &&
+  value.pickupStatus === 'completed' &&
+  typeof value.itemId === 'string' &&
+  typeof value.title === 'string';
+
+// 出品元スタッフが購入者のQRコード（受取コード）を読み取って受け渡しを完了する
+export const postOrgPickupComplete = (
+  itemId: string,
+  code: string,
+): Promise<OrgPickupCompleteResponse> =>
+  request(
+    `/api/org/items/${encodeURIComponent(itemId)}/pickup-complete`,
+    isOrgPickupCompleteResponse,
+    jsonInit('POST', { code }),
+  );
+
 export const orgCreateItem = (input: AdminItemInput): Promise<ItemResponse> =>
   request('/api/org/items', isItemResponse, jsonInit('POST', input));
 
@@ -385,14 +399,6 @@ export const postPickupReservation = (
     `/api/items/${encodeURIComponent(itemId)}/pickup-reservation`,
     isPickupReservationResponse,
     jsonInit('POST', { date }),
-  );
-
-// 無人ボックスでのセルフ受け取り完了（購入者本人の操作）
-export const postPickupSelfComplete = (itemId: string): Promise<PickupCompleteResponse> =>
-  request(
-    `/api/items/${encodeURIComponent(itemId)}/pickup-self-complete`,
-    isPickupCompleteResponse,
-    { method: 'POST' },
   );
 
 // ---------- 管理者 ----------

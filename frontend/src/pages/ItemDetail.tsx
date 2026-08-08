@@ -423,9 +423,19 @@ export const ItemDetail = (): JSX.Element => {
               <p className="empty">まだ入札はありません。最初の入札者になりませんか？</p>
             ) : (
               <ul className="bid-list">
-                {bids.map((bid) => (
-                  <li key={bid.bidId} className="bid-list__row">
-                    <span className="bid-list__name">{bid.bidderName}</span>
+                {bids.map((bid, index) => (
+                  <li
+                    key={bid.bidId}
+                    className={`bid-list__row${index === 0 ? ' bid-list__row--top' : ''}`}
+                  >
+                    <span className="bid-list__name">
+                      {bid.bidderName}
+                      {index === 0 ? (
+                        <span className="bid-list__top-badge">
+                          {isClosed ? '落札' : '現在の最高額'}
+                        </span>
+                      ) : null}
+                    </span>
                     <span className="bid-list__amount">{yen(bid.amount)}</span>
                     <span className="bid-list__time">
                       {relativeTime(bid.createdAt, nowMs)}

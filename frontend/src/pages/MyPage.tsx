@@ -4,12 +4,12 @@ import QRCode from 'qrcode';
 import {
   ApiError,
   deleteFavorite,
+  fetchItemDetail,
   fetchMyActiveBids,
   fetchMyFavorites,
   fetchMyWins,
   postPayment,
   postPickupReservation,
-  postPickupSelfComplete,
 } from '../api';
 import { useAuth } from '../auth/AuthContext';
 import { CategoryIcon } from '../components/CategoryIcon';
@@ -48,6 +48,57 @@ type ReservationState = {
   pickupBoxNumber: number;
 };
 
+// デモ決済用のカード情報をブラウザ内(localStorage)にだけ保存し、次回以降の入力を省略する
+const SAVED_CARD_KEY = 'megurimono-demo-card';
+
+type SavedCard = { cardNumber: string; expiry: string };
+
+const loadSavedCard = (): SavedCard | null => {
+  try {
+    const raw = window.localStorage.getItem(SAVED_CARD_KEY);
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      typeof (parsed as SavedCard).cardNumber === 'string' &&
+      typeof (parsed as SavedCard).expiry === 'string'
+    ) {
+      return parsed as SavedCard;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const saveCard = (card: SavedCard): void => {
+  try {
+    window.localStorage.setItem(SAVED_CARD_KEY, JSON.stringify(card));
+  } catch {
+    // 保存に失敗しても支払い自体には影響しないため無視する
+  }
+};
+
+const maskCardNumber = (cardNumber: string): string => {
+  const digits = cardNumber.replace(/\s/g, '');
+  const last4 = digits.slice(-4);
+  return `**** **** **** ${last4}`;
+};
+
+// 入力中のカード番号を4桁ごとにスペース区切りで表示する(最大19桁までのカード番号を想定)
+const formatCardNumber = (value: string): string => {
+  const digits = value.replace(/\D/g, '').slice(0, 19);
+  return digits.replace(/(.{4})/g, '$1 ').trim();
+};
+
+// 入力中の有効期限を MM/YY 形式にスラッシュ自動挿入で整形する
+const formatExpiry = (value: string): string => {
+  const digits = value.replace(/\D/g, '').slice(0, 4);
+  if (digits.length <= 2) return digits;
+  return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+};
+
 const PaymentPanel = ({
   itemId,
   amount,
@@ -57,19 +108,16 @@ const PaymentPanel = ({
   amount: number;
   onPaid: () => void;
 }): JSX.Element => {
+  const [savedCard, setSavedCard] = useState<SavedCard | null>(() => loadSavedCard());
+  const [useNewCard, setUseNewCard] = useState(false);
   const [cardNumber, setCardNumber] = useState('');
   const [expiry, setExpiry] = useState('');
   const [cvv, setCvv] = useState('');
+  const [rememberCard, setRememberCard] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
-    event.preventDefault();
-    setError(null);
-    if (cardNumber.trim() === '' || expiry.trim() === '' || cvv.trim() === '') {
-      setError('カード情報を入力してください(デモのため実在のカードは不要です)');
-      return;
-    }
+  const pay = (): void => {
     setSubmitting(true);
     postPayment(itemId)
       .then(() => onPaid())
@@ -79,13 +127,71 @@ const PaymentPanel = ({
       .finally(() => setSubmitting(false));
   };
 
+  const handlePayWithSavedCard = (): void => {
+    setError(null);
+    pay();
+  };
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    setError(null);
+    if (cardNumber.trim() === '' || expiry.trim() === '' || cvv.trim() === '') {
+      setError('カード情報を入力してください(デモのため実在のカードは不要です)');
+      return;
+    }
+    if (rememberCard) {
+      const card = { cardNumber: cardNumber.trim(), expiry: expiry.trim() };
+      saveCard(card);
+      setSavedCard(card);
+    }
+    pay();
+  };
+
+  if (savedCard !== null && !useNewCard) {
+    return (
+      <div className="payment-panel">
+        <p className="payment-panel__amount">
+          お支払い金額 <strong>{yen(amount)}</strong>
+        </p>
+        <p className="payment-panel__note">
+          ※デモ環境のため実際の決済は発生しません。カード情報はこの端末内にのみ保存されます。
+        </p>
+        <div className="saved-card">
+          <span className="saved-card__number">{maskCardNumber(savedCard.cardNumber)}</span>
+          <span className="saved-card__expiry">有効期限 {savedCard.expiry}</span>
+        </div>
+        {error !== null ? (
+          <p className="field__error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          className="btn btn--primary"
+          onClick={handlePayWithSavedCard}
+          disabled={submitting}
+        >
+          {submitting ? '処理中…' : `${yen(amount)} を支払う`}
+        </button>
+        <button
+          type="button"
+          className="btn btn--ghost btn--fit"
+          onClick={() => setUseNewCard(true)}
+          disabled={submitting}
+        >
+          別のカード情報を使う
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="payment-panel">
       <p className="payment-panel__amount">
         お支払い金額 <strong>{yen(amount)}</strong>
       </p>
       <p className="payment-panel__note">
-        ※デモ環境のため実際の決済は発生しません。カード情報も送信・保存されません。
+        ※デモ環境のため実際の決済は発生しません。カード情報はサーバーに送信されず、この端末内にのみ保存されます。
       </p>
       <form className="payment-form" onSubmit={handleSubmit} noValidate>
         <div className="field">
@@ -97,7 +203,7 @@ const PaymentPanel = ({
             placeholder="4242 4242 4242 4242"
             autoComplete="off"
             value={cardNumber}
-            onChange={(e) => setCardNumber(e.target.value)}
+            onChange={(e) => setCardNumber(formatCardNumber(e.target.value))}
             required
           />
         </div>
@@ -107,10 +213,11 @@ const PaymentPanel = ({
             <input
               id={`card-expiry-${itemId}`}
               type="text"
+              inputMode="numeric"
               placeholder="MM/YY"
               autoComplete="off"
               value={expiry}
-              onChange={(e) => setExpiry(e.target.value)}
+              onChange={(e) => setExpiry(formatExpiry(e.target.value))}
               required
             />
           </div>
@@ -128,6 +235,14 @@ const PaymentPanel = ({
             />
           </div>
         </div>
+        <label className="payment-form__remember">
+          <input
+            type="checkbox"
+            checked={rememberCard}
+            onChange={(e) => setRememberCard(e.target.checked)}
+          />
+          次回から入力を省略する(この端末に保存)
+        </label>
         {error !== null ? (
           <p className="field__error" role="alert">
             {error}
@@ -136,10 +251,24 @@ const PaymentPanel = ({
         <button type="submit" className="btn btn--primary" disabled={submitting}>
           {submitting ? '処理中…' : `${yen(amount)} を支払う`}
         </button>
+        {savedCard !== null ? (
+          <button
+            type="button"
+            className="btn btn--ghost btn--fit"
+            onClick={() => setUseNewCard(false)}
+            disabled={submitting}
+          >
+            保存済みのカードを使う
+          </button>
+        ) : null}
       </form>
     </div>
   );
 };
+
+// 出品元・管理者がQRを読み取って受け渡し完了にするまでの間、この間隔で状態をポーリングする
+// (解錠されたことをできるだけ早く画面に反映したいため短めの間隔にしている)
+const PICKUP_STATUS_POLL_MS = 1500;
 
 const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
   const [paid, setPaid] = useState(item.paymentStatus === 'paid');
@@ -147,7 +276,7 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
   const [date, setDate] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [unlocking, setUnlocking] = useState(false);
+  const [justCompleted, setJustCompleted] = useState(false);
 
   const status = reservation?.pickupStatus ?? item.pickupStatus ?? 'awaiting';
   const pickupDate = reservation?.pickupDate ?? item.pickupDate;
@@ -155,6 +284,30 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
   const pickupBoxNumber = reservation?.pickupBoxNumber ?? item.pickupBoxNumber;
   const deadlineDay = dayOf(item.pickupDeadline);
   const today = new Date().toISOString().slice(0, 10);
+
+  // 出品元・管理者が受取QRを読み取って受け渡し完了にすると、ここでそれを検知して自動的に画面を更新する
+  useEffect(() => {
+    if (status !== 'reserved') return undefined;
+    const timer = window.setInterval(() => {
+      fetchItemDetail(item.itemId)
+        .then((res) => {
+          if (res.item.pickupStatus === 'completed') {
+            setJustCompleted(true);
+            setReservation((prev) =>
+              prev !== null
+                ? { ...prev, pickupStatus: 'completed' }
+                : pickupDate !== undefined && pickupCode !== undefined && pickupBoxNumber !== undefined
+                  ? { pickupStatus: 'completed', pickupDate, pickupCode, pickupBoxNumber }
+                  : null,
+            );
+          }
+        })
+        .catch(() => {
+          // ポーリング失敗時は次回に再試行する
+        });
+    }, PICKUP_STATUS_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [status, item.itemId, pickupDate, pickupCode, pickupBoxNumber]);
 
   const handleReserve = (event: React.FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
@@ -179,29 +332,14 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
       .finally(() => setSubmitting(false));
   };
 
-  const handleUnlock = (): void => {
-    setError(null);
-    setUnlocking(true);
-    postPickupSelfComplete(item.itemId)
-      .then(() => {
-        setReservation((prev) =>
-          prev !== null
-            ? { ...prev, pickupStatus: 'completed' }
-            : pickupDate !== undefined && pickupCode !== undefined && pickupBoxNumber !== undefined
-              ? { pickupStatus: 'completed', pickupDate, pickupCode, pickupBoxNumber }
-              : null,
-        );
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : '受け取り完了処理に失敗しました');
-      })
-      .finally(() => setUnlocking(false));
-  };
-
   return (
     <article className="win-card">
       <div className="win-card__media" aria-hidden="true">
-        <CategoryIcon category={item.category} size={40} />
+        {item.imageUrls?.[0] !== undefined ? (
+          <img className="win-card__media-img" src={item.imageUrls[0]} alt="" loading="lazy" />
+        ) : (
+          <CategoryIcon category={item.category} size={40} />
+        )}
       </div>
       <div className="win-card__body">
         <h2 className="win-card__title">
@@ -218,7 +356,22 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
         ) : null}
 
         {status === 'completed' ? (
-          <p className="pickup-done">受け渡し完了。ご利用ありがとうございました。</p>
+          <div className="pickup-done">
+            <span className="pickup-done__stamp" aria-hidden="true">
+              済
+            </span>
+            <div>
+              {justCompleted ? (
+                <p>
+                  {pickupBoxNumber !== undefined
+                    ? `${pickupBoxNumber}番のボックスが解錠されました。`
+                    : 'ボックスが解錠されました。'}
+                </p>
+              ) : null}
+              <p>受け渡し完了。ご利用ありがとうございました。</p>
+              {justCompleted ? <p>ボックスを施錠しました。</p> : null}
+            </div>
+          </div>
         ) : !paid ? (
           <PaymentPanel
             itemId={item.itemId}
@@ -232,7 +385,7 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
               <p className="pickup-panel__label">受取ボックス番号: {pickupBoxNumber}番</p>
             ) : null}
             <p className="pickup-panel__label">
-              受取拠点の無人ボックスでこのコードまたはQRを読み取らせてください
+              受取拠点のスタッフにこのコードまたはQRを読み取ってもらってください。読み取られると自動的に受け取り完了になります。
             </p>
             <p className="pickup-code" aria-label={`受取コード ${pickupCode}`}>
               {pickupCode}
@@ -243,14 +396,6 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
                 {error}
               </p>
             ) : null}
-            <button
-              type="button"
-              className="btn btn--primary"
-              onClick={handleUnlock}
-              disabled={unlocking}
-            >
-              {unlocking ? '解錠中…' : 'ボックスを解錠する(受け取り完了)'}
-            </button>
           </div>
         ) : (
           <form className="pickup-form" onSubmit={handleReserve} noValidate>

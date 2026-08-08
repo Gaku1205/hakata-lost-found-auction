@@ -1155,7 +1155,7 @@ const SEEDS: readonly SeedDef[] = [
   {
     itemId: 'i-045',
     orgId: 'org-fukuoka-police',
-    title: 'ウエストポーチ（黒・ナイロン）',
+    title: 'ウエストポーチ（オレンジ・キャンバス地）',
     category: 'bag',
     description: '中身は空の状態で保管されていました。',
     foundLocation: '百道浜 海浜公園',
@@ -1174,7 +1174,7 @@ const SEEDS: readonly SeedDef[] = [
     conditionRank: 'good',
     quantity: 1,
     foundDate: foundAt(190),
-    color: '黒',
+    color: 'オレンジ',
   },
   {
     itemId: 'i-046',

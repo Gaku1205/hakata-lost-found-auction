@@ -690,34 +690,6 @@ const reservePickup = async (
   return json(200, { pickupStatus: 'reserved', pickupDate: date, pickupCode, pickupBoxNumber });
 };
 
-// 無人ボックスがQRコード／認証コードを読み取り、購入者本人の操作で受け渡しを完了する
-const selfCompletePickup = async (
-  itemId: string,
-  user: AuthUser,
-): Promise<APIGatewayProxyResult> => {
-  const itemResult = await doc.send(
-    new GetCommand({ TableName: ITEMS_TABLE, Key: { itemId } }),
-  );
-  const item: unknown = itemResult.Item;
-  if (!isLostItem(item)) return json(404, { message: '出品が見つかりません' });
-  if (item.winnerSub !== user.sub) {
-    return json(403, { message: 'この物品の落札者ではありません' });
-  }
-  if (item.pickupStatus !== 'reserved') {
-    return json(409, { message: '受取予約が完了していないか、すでに受け渡し済みです' });
-  }
-
-  await doc.send(
-    new UpdateCommand({
-      TableName: ITEMS_TABLE,
-      Key: { itemId },
-      UpdateExpression: 'SET pickupStatus = :completed',
-      ExpressionAttributeValues: { ':completed': 'completed' },
-    }),
-  );
-  return json(200, { pickupStatus: 'completed' });
-};
-
 // ---------- 管理者API ----------
 
 // 拾得日から公告日・保管期間満了日を算出する（遺失物法の建付けを表現するための日数）
@@ -1353,25 +1325,26 @@ export const autoCloseHandler = async (): Promise<{ closed: number }> => {
   return { closed };
 };
 
-const adminCompletePickup = async (
+// 受取コードを照合して受け渡し完了にする共通処理。
+// requiredOrgId を渡すと、その出品元が登録した商品でなければ403で拒否する（出品元スタッフ操作用）。
+// 渡さなければ出品元を問わず照合する（管理者操作用）。
+const completePickupWithCode = async (
   itemId: string,
-  body: string | null,
+  code: string,
+  requiredOrgId?: string,
 ): Promise<APIGatewayProxyResult> => {
-  const data = parseBody(body);
-  const code = data?.['code'];
-  if (typeof code !== 'string' || code.trim() === '') {
-    return json(400, { message: '受取コードを入力してください' });
-  }
-
   const itemResult = await doc.send(
     new GetCommand({ TableName: ITEMS_TABLE, Key: { itemId } }),
   );
   const item: unknown = itemResult.Item;
   if (!isLostItem(item)) return json(404, { message: '出品が見つかりません' });
+  if (requiredOrgId !== undefined && item.orgId !== requiredOrgId) {
+    return json(403, { message: 'この出品元が登録した商品ではありません' });
+  }
   if (item.pickupStatus !== 'reserved') {
     return json(409, { message: '受取予約がされていません' });
   }
-  if (item.pickupCode !== code.trim()) {
+  if (item.pickupCode !== code) {
     return json(409, { message: '受取コードが一致しません' });
   }
 
@@ -1383,7 +1356,37 @@ const adminCompletePickup = async (
       ExpressionAttributeValues: { ':completed': 'completed' },
     }),
   );
-  return json(200, { pickupStatus: 'completed' });
+  return json(200, { pickupStatus: 'completed', itemId, title: item.title });
+};
+
+const adminCompletePickup = async (
+  itemId: string,
+  body: string | null,
+): Promise<APIGatewayProxyResult> => {
+  const data = parseBody(body);
+  const code = data?.['code'];
+  if (typeof code !== 'string' || code.trim() === '') {
+    return json(400, { message: '受取コードを入力してください' });
+  }
+  return await completePickupWithCode(itemId, code.trim());
+};
+
+// 出品元スタッフが購入者のQRコード（または受取コード）を読み取って受け渡しを完了する。
+// 自分の出品元が登録した商品以外は403で拒否する。
+const orgCompletePickup = async (
+  itemId: string,
+  body: string | null,
+  user: AuthUser,
+): Promise<APIGatewayProxyResult> => {
+  if (user.orgId === undefined) {
+    return json(403, { message: 'このアカウントには出品元が紐づいていません' });
+  }
+  const data = parseBody(body);
+  const code = data?.['code'];
+  if (typeof code !== 'string' || code.trim() === '') {
+    return json(400, { message: '受取コードを入力してください' });
+  }
+  return await completePickupWithCode(itemId, code.trim(), user.orgId);
 };
 
 // ---------- 出品画像のAI解析 ----------
@@ -1848,18 +1851,6 @@ export const handler = async (
     }
 
     if (
-      segments[1] === 'items' &&
-      segments.length === 4 &&
-      segments[3] === 'pickup-self-complete' &&
-      method === 'POST'
-    ) {
-      if (user === null) return json(401, { message: 'ログインが必要です' });
-      const itemId = segments[2];
-      if (itemId === undefined) return json(404, { message: 'Not Found' });
-      return await selfCompletePickup(decodeURIComponent(itemId), user);
-    }
-
-    if (
       segments[1] === 'me' &&
       segments[2] === 'wins' &&
       segments.length === 3 &&
@@ -1937,6 +1928,16 @@ export const handler = async (
         const itemId = segments[3];
         if (itemId === undefined) return json(404, { message: 'Not Found' });
         return await orgConfirmHandover(decodeURIComponent(itemId), user);
+      }
+      if (
+        segments[2] === 'items' &&
+        segments.length === 5 &&
+        segments[4] === 'pickup-complete' &&
+        method === 'POST'
+      ) {
+        const itemId = segments[3];
+        if (itemId === undefined) return json(404, { message: 'Not Found' });
+        return await orgCompletePickup(decodeURIComponent(itemId), event.body, user);
       }
       if (segments[2] === 'stats' && segments.length === 3 && method === 'GET') {
         return await getOrgStats(user);

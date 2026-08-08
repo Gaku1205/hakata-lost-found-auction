@@ -17,6 +17,7 @@ import { MyPage } from './pages/MyPage';
 import { OrgContact } from './pages/org/OrgContact';
 import { OrgItemForm } from './pages/org/OrgItemForm';
 import { OrgItems } from './pages/org/OrgItems';
+import { OrgPickupScan } from './pages/org/OrgPickupScan';
 import { OrgRevenue } from './pages/org/OrgRevenue';
 import { PartnerApply } from './pages/PartnerApply';
 import { SignUp } from './pages/SignUp';
@@ -205,9 +206,11 @@ const Header = (): JSX.Element => {
             <NavLink to="/items" className="site-nav__link">
               出品一覧
             </NavLink>
-            <NavLink to="/partners/apply" className="site-nav__link">
-              企業の方へ
-            </NavLink>
+            {!isAuthed ? (
+              <NavLink to="/partners/apply" className="site-nav__link">
+                企業の方へ
+              </NavLink>
+            ) : null}
             {isAuthed && !isOrg ? (
               <NavLink to="/mypage" className="site-nav__link">
                 マイページ
@@ -261,6 +264,14 @@ export const App = (): JSX.Element => (
           element={
             <RequireOrg>
               <OrgItems />
+            </RequireOrg>
+          }
+        />
+        <Route
+          path="/org/handover-scan"
+          element={
+            <RequireOrg>
+              <OrgPickupScan />
             </RequireOrg>
           }
         />

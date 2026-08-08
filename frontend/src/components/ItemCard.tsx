@@ -26,6 +26,10 @@ export const ItemCard = ({ item, nowMs, index }: Props): JSX.Element => {
         ) : (
           <CategoryIcon category={item.category} />
         )}
+        <span className="card__case-tag">
+          <span className="card__case-tag-hole" />
+          {item.caseNumber}
+        </span>
         {isClosed ? (
           <span className="card__badge">落札済み</span>
         ) : (

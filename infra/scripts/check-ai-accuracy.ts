@@ -202,7 +202,8 @@ const main = async (): Promise<void> => {
   const total = GROUND_TRUTH.length;
   const summary = `# AI画像解析 精度チェック結果
 
-対象: \`analyzeItemImage\`（claude-haiku-4-5） / 64枚を実際のAPIに投げて自動採点
+対象: \`analyzeItemImage\`（Bedrock経由のclaude-haiku-4-5） / ${total}枚を実際のAPIに投げて自動採点
+（写真を持たない${ITEM_IDS_WITHOUT_PHOTO.size}件は対象外）
 
 ## サマリー
 

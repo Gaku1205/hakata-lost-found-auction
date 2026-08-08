@@ -960,9 +960,12 @@ button {
   gap: 6px;
 }
 
+/* 記入用紙の項目名として、値より一段引いた見え方にする。
+   ラベルが主張しすぎると入力値が読み取りにくくなるため、字間で存在感を出す。 */
 .field label {
-  font-size: 14px;
+  font-size: 12.5px;
   font-weight: 700;
+  letter-spacing: 0.06em;
 }
 
 .req {
@@ -998,15 +1001,18 @@ button {
   color: var(--c-sub);
 }
 
+/* 編集できない項目。入力欄と同じ見た目だと触れると誤解されるため、
+   記入済みの用紙のように保管票の紙色を敷いて区別する。 */
 .field__static {
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-height: 46px;
   padding: 10px 14px;
-  border: 1px solid var(--c-border);
+  border: 1px solid var(--c-tag-edge);
   border-radius: 10px;
-  background: var(--c-chip);
+  background: var(--c-tag);
+  color: var(--c-tag-ink);
   font-size: 15px;
 }
 
@@ -2009,13 +2015,20 @@ button {
   min-width: 860px;
 }
 
+/* 台帳の列見出しとして、保管票と同じ紙色を敷く。スクロールしても
+   見出しが本文に埋もれないよう、下端は罫線で締める。 */
+.admin-table thead {
+  background: var(--c-tag);
+}
+
 .admin-table th {
   text-align: left;
-  padding: 12px 14px;
-  border-bottom: 2px solid var(--c-border);
-  color: var(--c-sub);
-  font-size: 13px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--c-tag-edge);
+  color: var(--c-tag-sub);
+  font-size: 12px;
   font-weight: 700;
+  letter-spacing: 0.06em;
   white-space: nowrap;
 }
 
@@ -2035,6 +2048,16 @@ button {
 
   .admin-table--items .table-sub {
     white-space: normal;
+  }
+
+  /* 列数が多く横に長い台帳なので、目で行を追えるよう行単位で反応させる。
+     スマホでは行がカード状に分解されるため、この見た目は使わない。 */
+  .admin-table tbody tr {
+    transition: background-color 120ms ease-out;
+  }
+
+  .admin-table tbody tr:hover {
+    background: var(--c-tag);
   }
 }
 

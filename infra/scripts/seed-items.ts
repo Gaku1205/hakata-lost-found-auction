@@ -24,6 +24,19 @@ export const hashString = (value: string): number => {
 
 export const generateBoxNumber = (itemId: string): number => (hashString(`box-${itemId}`) % 24) + 1;
 
+// 品質が確保できなかった写真は載せない（該当ファイルも削除済み）。写真がない出品は
+// 画面上カテゴリアイコンにフォールバックする。AI解析の精度チェックもこの4件は対象外。
+//   i-017: 複数の傘を木に吊るしたアート作品で、遺失物の写真として成立しない
+//   i-024: ベルト・定規・硬貨などが写り込んだ雑然とした構図
+//   i-051: 人物が大きく写っている
+//   i-058: 撮影者のウォーターマークが入っている
+export const ITEM_IDS_WITHOUT_PHOTO: ReadonlySet<string> = new Set([
+  'i-017',
+  'i-024',
+  'i-051',
+  'i-058',
+]);
+
 export type SeedDef = {
   itemId: string;
   title: string;

@@ -27,7 +27,15 @@ import type {
   PickupStatus,
 } from '../lambda/types';
 // 出品データ本体は check-ai-accuracy.ts と共有するため別ファイルに置いている
-import { DAYS, foundAt, generateBoxNumber, hashString, now, SEEDS } from './seed-items';
+import {
+  DAYS,
+  foundAt,
+  generateBoxNumber,
+  hashString,
+  ITEM_IDS_WITHOUT_PHOTO,
+  now,
+  SEEDS,
+} from './seed-items';
 
 const ITEMS_TABLE = 'megurimono-items';
 const BIDS_TABLE = 'megurimono-bids';
@@ -268,7 +276,9 @@ const orgById = new Map(ORGANIZATIONS.map((org) => [org.orgId, org]));
 // frontend/public/images/items/ に実写真が用意済みのitemIdのみ。
 // それ以外はimageUrlを付けず、ItemCardのカテゴリアイコン表示にフォールバックさせる。
 const ITEM_IDS_WITH_PHOTO = new Set(
-  Array.from({ length: 64 }, (_, i) => `i-${String(i + 1).padStart(3, '0')}`),
+  Array.from({ length: 64 }, (_, i) => `i-${String(i + 1).padStart(3, '0')}`).filter(
+    (itemId) => !ITEM_IDS_WITHOUT_PHOTO.has(itemId),
+  ),
 );
 
 const buildItems = (

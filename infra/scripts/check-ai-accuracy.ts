@@ -13,7 +13,7 @@ import {
   CognitoIdentityProviderClient,
   InitiateAuthCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
-import { SEEDS } from './seed-items';
+import { ITEM_IDS_WITHOUT_PHOTO, SEEDS } from './seed-items';
 
 const REGION = process.env.AWS_REGION ?? 'ap-northeast-1';
 const USER_POOL_CLIENT_ID = process.env.USER_POOL_CLIENT_ID ?? 'REDACTED_CLIENT_ID';
@@ -39,7 +39,9 @@ type GroundTruth = {
 // 正解データは seed-items.ts の SEEDS をそのまま使う。以前はこのファイルに手動コピーを
 // 持っていたが、商品画像を差し替えてもコピー側が古いまま取り残され、正しいAI出力に
 // ✕が付いていた（例: i-045は採点表「黒」／実データ「オレンジ」）。
-const GROUND_TRUTH: GroundTruth[] = SEEDS.map((seed) => ({
+const GROUND_TRUTH: GroundTruth[] = SEEDS.filter(
+  (seed) => !ITEM_IDS_WITHOUT_PHOTO.has(seed.itemId),
+).map((seed) => ({
   itemId: seed.itemId,
   title: seed.title,
   category: seed.category,
@@ -104,6 +106,57 @@ const judgeExact = (truth: string, actual: string): string => {
   return `✕(seed:「${truth}」 AI:「${actual}」)`;
 };
 
+// 色は完全一致で判定すると「黒」と「ブラック」が不一致になり、指標が実態から
+// 大きくずれる（旧実装では52件が✕、うち25件は実質同色だった）。カタカナ表記を
+// 漢字に寄せ、濃淡の修飾語を落としたうえで色の集合として比較する。
+const COLOR_SYNONYMS: readonly (readonly [string, string])[] = [
+  ['ブラック', '黒'], ['ホワイト', '白'], ['ブラウン', '茶'], ['ネイビー', '紺'],
+  ['グレー', '灰'], ['グレイ', '灰'], ['ゴールド', '金'], ['シルバー', '銀'],
+  ['レッド', '赤'], ['ブルー', '青'], ['グリーン', '緑'], ['イエロー', '黄'],
+  ['パープル', '紫'], ['オレンジ', '橙'], ['ピンク', '桃'], ['マゼンタ', '桃'],
+  ['タン', 'キャメル'], ['クリーム', 'ベージュ'], ['生成り', 'ベージュ'],
+  ['虹', 'マルチカラー'],
+];
+
+// 「ライトブルー」と「ブルー」を別色として扱わないため、濃淡だけを表す語は落とす
+const COLOR_MODIFIERS = ['ライト', 'ダーク', 'ディープ', 'パステル', '濃', '薄', '明るい', '暗い'];
+
+const normalizeColorToken = (value: string): string => {
+  let t = value;
+  for (const [kana, kanji] of COLOR_SYNONYMS) t = t.split(kana).join(kanji);
+  for (const mod of COLOR_MODIFIERS) t = t.split(mod).join('');
+  return t.replace(/[\s系色]/g, '');
+};
+
+const splitColors = (value: string): string[] =>
+  value
+    // 「透明（フレーム：黒）」のような補足は主色の判定に使わない
+    .replace(/[（(][^）)]*[）)]/g, '')
+    .split(/[×・、,+]/)
+    .map(normalizeColorToken)
+    .filter((t) => t !== '');
+
+// a の各色が b のいずれかに含まれていれば「a は b に包含される」とみなす。
+// 「茶」⊂「キャメル茶」のような粒度差を拾うため部分一致で判定する。
+const isCoveredBy = (a: string[], b: string[]): boolean =>
+  a.length > 0 && a.every((x) => b.some((y) => y.includes(x) || x.includes(y)));
+
+const judgeColor = (truth: string, actual: string): string => {
+  if (truth === actual) return '○';
+  if (truth === '' && actual === '') return '○(空欄一致)';
+  if (truth === '') return `-(seed空欄 AI:「${actual}」)`;
+
+  const t = splitColors(truth);
+  const a = splitColors(actual);
+  if (t.length > 0 && a.length > 0) {
+    const sameSet = t.length === a.length && isCoveredBy(t, a) && isCoveredBy(a, t);
+    if (sameSet) return '○(表記ゆれ)';
+    if (isCoveredBy(t, a)) return '○(AIがより詳細)';
+    if (isCoveredBy(a, t)) return `△(AIが一部のみ seed:「${truth}」 AI:「${actual}」)`;
+  }
+  return `✕(seed:「${truth}」 AI:「${actual}」)`;
+};
+
 const judgeCondition = (truth: string, actual: string): string =>
   truth === actual ? '○' : `△(seed:${truth} AI:${actual})`;
 
@@ -115,6 +168,7 @@ const main = async (): Promise<void> => {
   let categoryMatch = 0;
   let conditionMatch = 0;
   let colorMatch = 0;
+  let colorSkipped = 0;
   let brandHallucination = 0;
   let errors = 0;
 
@@ -124,11 +178,13 @@ const main = async (): Promise<void> => {
       const suggestion = await analyzeOne(truth.itemId, idToken);
       const categoryJudge = judgeExact(truth.category, suggestion.category);
       const conditionJudge = judgeCondition(truth.conditionRank, suggestion.conditionRank);
-      const colorJudge = judgeExact(truth.color, suggestion.color);
+      const colorJudge = judgeColor(truth.color, suggestion.color);
       const brandJudge = judgeBrand(truth.brand, suggestion.brand);
       if (categoryJudge === '○') categoryMatch += 1;
       if (conditionJudge === '○') conditionMatch += 1;
       if (colorJudge.startsWith('○')) colorMatch += 1;
+      // seedに色の記載がない出品は正解が存在しないため、色の母数から除く
+      if (colorJudge.startsWith('-')) colorSkipped += 1;
       if (brandJudge.startsWith('✕')) brandHallucination += 1;
 
       rows.push(
@@ -152,7 +208,7 @@ const main = async (): Promise<void> => {
 
 - カテゴリ一致: ${categoryMatch}/${total}
 - 状態ランク一致: ${conditionMatch}/${total}
-- 色一致: ${colorMatch}/${total}
+- 色一致: ${colorMatch}/${total - colorSkipped}（表記ゆれ・粒度差は一致扱い。seedに色の記載がない${colorSkipped}件は母数から除外）
 - ブランドのハルシネーション疑い（seed空欄なのにAIが埋めた件数）: ${brandHallucination}/${total}
 - 通信エラー: ${errors}/${total}
 
@@ -166,7 +222,7 @@ ${rows.join('\n')}
   writeFileSync(REPORT_PATH, summary, 'utf-8');
   console.log(`\n完了。結果を書き出しました: ${REPORT_PATH}`);
   console.log(
-    `カテゴリ一致 ${categoryMatch}/${total} / 状態ランク一致 ${conditionMatch}/${total} / 色一致 ${colorMatch}/${total} / ブランドのハルシネーション疑い ${brandHallucination}/${total} / エラー ${errors}/${total}`,
+    `カテゴリ一致 ${categoryMatch}/${total} / 状態ランク一致 ${conditionMatch}/${total} / 色一致 ${colorMatch}/${total - colorSkipped} / ブランドのハルシネーション疑い ${brandHallucination}/${total} / エラー ${errors}/${total}`,
   );
 };
 

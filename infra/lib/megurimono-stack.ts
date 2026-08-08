@@ -23,6 +23,9 @@ export const PARTNER_APPLICATIONS_TABLE_NAME = 'megurimono-partner-applications'
 export const FAVORITES_TABLE_NAME = 'megurimono-favorites';
 export const BIDDER_INDEX_NAME = 'BidderIndex';
 export const INQUIRIES_TABLE_NAME = 'megurimono-inquiries';
+// 東京リージョンでHaiku 4.5を呼ぶには、日本国内に閉じたクロスリージョン推論
+// プロファイル（jp.）を経由する必要がある。基盤モデルIDを直接指定しても呼べない。
+export const BEDROCK_MODEL_ID = 'jp.anthropic.claude-haiku-4-5-20251001-v1:0';
 
 export class MeguriMonoStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -128,12 +131,13 @@ export class MeguriMonoStack extends cdk.Stack {
       description: 'めぐりモノ 出品元（警察・自治体／企業）アカウント',
     });
 
-    // 出品画像のAI解析（Claude）に使うAPIキー。値はデプロイ後に手動で設定する:
-    //   aws secretsmanager put-secret-value --secret-id megurimono/anthropic-api-key --secret-string '<APIキー>'
-    const anthropicApiKeySecret = new secretsmanager.Secret(this, 'AnthropicApiKey', {
+    // AI解析はBedrock（Lambda実行ロールのIAM権限で認証）に移行したため、このSecretは
+    // 現在どこからも参照していない。Bedrockで問題が出たときに直APIへ戻せるよう、
+    // キーの値ごと消えないようRETAINにして残している。不要が確定したら削除してよい。
+    new secretsmanager.Secret(this, 'AnthropicApiKey', {
       secretName: 'megurimono/anthropic-api-key',
-      description: 'Anthropic APIキー（出品画像のAI解析用）',
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      description: 'Anthropic APIキー（旧: 出品画像のAI解析用。現在は未使用）',
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
     // ---------- API（Lambda + API Gateway） ----------
@@ -146,7 +150,7 @@ export class MeguriMonoStack extends cdk.Stack {
       // AI画像解析は数秒かかるため、API Gateway(REST)の上限である29秒まで許容する
       timeout: cdk.Duration.seconds(29),
       environment: {
-        ANTHROPIC_API_KEY_SECRET_ARN: anthropicApiKeySecret.secretArn,
+        BEDROCK_MODEL_ID: BEDROCK_MODEL_ID,
         ITEMS_TABLE: itemsTable.tableName,
         BIDS_TABLE: bidsTable.tableName,
         BIDDER_INDEX: BIDDER_INDEX_NAME,
@@ -168,7 +172,17 @@ export class MeguriMonoStack extends cdk.Stack {
     partnerApplicationsTable.grantReadWriteData(apiFn);
     favoritesTable.grantReadWriteData(apiFn);
     inquiriesTable.grantReadWriteData(apiFn);
-    anthropicApiKeySecret.grantRead(apiFn);
+    // 出品画像のAI解析。推論プロファイル（jp.）は複数リージョンの基盤モデルへ
+    // 振り分けるため、プロファイルARNと基盤モデルARNの両方に権限が要る。
+    apiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['bedrock:InvokeModel'],
+        resources: [
+          'arn:aws:bedrock:*::foundation-model/anthropic.*',
+          `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*`,
+        ],
+      }),
+    );
     apiFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['cloudformation:DescribeStacks', 'cloudformation:DescribeStackResources', 'cloudformation:DescribeStackEvents'],

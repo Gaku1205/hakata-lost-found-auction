@@ -14,8 +14,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
-import Anthropic from '@anthropic-ai/sdk';
+import { AnthropicBedrock } from '@anthropic-ai/bedrock-sdk';
 import { CloudFormationClient, DescribeStacksCommand, DescribeStackResourcesCommand, DescribeStackEventsCommand } from '@aws-sdk/client-cloudformation';
 import {
   AdminAddUserToGroupCommand,
@@ -58,7 +57,10 @@ const USER_POOL_ID = process.env.USER_POOL_ID ?? '';
 const USER_POOL_CLIENT_ID = process.env.USER_POOL_CLIENT_ID ?? '';
 const REGION = process.env.AWS_REGION ?? 'ap-northeast-1';
 const IMAGES_BUCKET = process.env.IMAGES_BUCKET ?? '';
-const ANTHROPIC_API_KEY_SECRET_ARN = process.env.ANTHROPIC_API_KEY_SECRET_ARN ?? '';
+// 出品画像のAI解析に使うBedrockのモデルID。東京リージョンでは日本国内に閉じた
+// クロスリージョン推論プロファイル（jp.）経由でのみ Haiku 4.5 を呼べる。
+const BEDROCK_MODEL_ID =
+  process.env.BEDROCK_MODEL_ID ?? 'jp.anthropic.claude-haiku-4-5-20251001-v1:0';
 
 const PICKUP_DEADLINE_DAYS = 14;
 
@@ -85,8 +87,9 @@ const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 });
 const s3 = new S3Client({});
 const cfn = new CloudFormationClient({});
-const secrets = new SecretsManagerClient({});
 const cognitoIdp = new CognitoIdentityProviderClient({});
+// 認証はLambda実行ロールのIAM権限で行うため、APIキーの受け渡しは不要。
+const bedrock = new AnthropicBedrock({ awsRegion: REGION });
 
 const json = (statusCode: number, body: unknown): APIGatewayProxyResult => ({
   statusCode,
@@ -1396,8 +1399,13 @@ const ANALYZE_IMAGE_MAX_BASE64_LENGTH = 3_000_000;
 // 1リクエスト（複数枚合計）の上限。API Gatewayのペイロード上限とAI解析コストの両方を抑える。
 const ANALYZE_IMAGES_MAX_TOTAL_BASE64_LENGTH = 10_000_000;
 
+// Bedrockは output_config（構造化出力）を受け付けないため、同じスキーマを
+// ツールの入力スキーマとして渡し、tool_choice で呼び出しを強制することで
+// 出力の形を固定している。
+const ITEM_SUGGESTION_TOOL_NAME = 'submit_item_suggestion';
+
 const ITEM_SUGGESTION_SCHEMA = {
-  type: 'object',
+  type: 'object' as const,
   properties: {
     title: { type: 'string' },
     category: { type: 'string', enum: [...ITEM_CATEGORIES] },
@@ -1430,21 +1438,6 @@ const ANALYZE_SYSTEM_PROMPT = `あなたは遺失物オークション「めぐ�
 写真から判断できない項目は必ず空文字にしてください。推測で埋めないこと。
 遺失物なので所有者を特定しうる情報（氏名・住所・口座番号・書類の記載内容など）は一切書かないでください。`;
 
-let cachedAnthropicApiKey: string | null = null;
-
-const getAnthropicApiKey = async (): Promise<string> => {
-  if (cachedAnthropicApiKey !== null) return cachedAnthropicApiKey;
-  const result = await secrets.send(
-    new GetSecretValueCommand({ SecretId: ANTHROPIC_API_KEY_SECRET_ARN }),
-  );
-  const value = result.SecretString;
-  if (value === undefined || value.trim() === '') {
-    throw new Error('Anthropic APIキーが未設定です');
-  }
-  cachedAnthropicApiKey = value.trim();
-  return cachedAnthropicApiKey;
-};
-
 const isItemSuggestion = (value: unknown): value is ItemSuggestion =>
   isRecord(value) &&
   typeof value['title'] === 'string' &&
@@ -1473,9 +1466,6 @@ const isAnalyzableImage = (value: unknown): value is AnalyzableImage =>
 
 // 出品画像（1〜複数枚）をClaudeに渡し、出品フォームの各項目を推定して返す。管理者・出品元の双方が利用する。
 const analyzeItemImage = async (body: string | null): Promise<APIGatewayProxyResult> => {
-  if (ANTHROPIC_API_KEY_SECRET_ARN === '') {
-    return json(503, { message: 'AI解析は現在利用できません' });
-  }
   const data = parseBody(body);
   if (data === null) return json(400, { message: 'リクエスト形式が不正です' });
 
@@ -1498,21 +1488,20 @@ const analyzeItemImage = async (body: string | null): Promise<APIGatewayProxyRes
     return json(413, { message: '画像サイズの合計が大きすぎます' });
   }
 
-  let apiKey: string;
-  try {
-    apiKey = await getAnthropicApiKey();
-  } catch {
-    return json(503, { message: 'AI解析は現在利用できません（APIキー未設定）' });
-  }
-
-  const anthropic = new Anthropic({ apiKey });
   let response;
   try {
-    response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5',
+    response = await bedrock.messages.create({
+      model: BEDROCK_MODEL_ID,
       max_tokens: 2048,
       system: ANALYZE_SYSTEM_PROMPT,
-      output_config: { format: { type: 'json_schema', schema: ITEM_SUGGESTION_SCHEMA } },
+      tools: [
+        {
+          name: ITEM_SUGGESTION_TOOL_NAME,
+          description: '写真から読み取った内容で出品フォームの各項目を提出する',
+          input_schema: ITEM_SUGGESTION_SCHEMA,
+        },
+      ],
+      tool_choice: { type: 'tool', name: ITEM_SUGGESTION_TOOL_NAME },
       messages: [
         {
           role: 'user',
@@ -1534,11 +1523,11 @@ const analyzeItemImage = async (body: string | null): Promise<APIGatewayProxyRes
     });
   } catch (err: unknown) {
     console.error('AI解析に失敗しました', err);
-    // 認証エラーならキャッシュを捨てる。APIキーを差し替えた直後に、
-    // 古い値を掴んだままのコンテナが失敗し続けるのを防ぐ。
-    if (isRecord(err) && err['status'] === 401) {
-      cachedAnthropicApiKey = null;
-      return json(503, { message: 'AI解析は現在利用できません（APIキーが無効です）' });
+    // モデルアクセス未承認やIAM権限不足は時間をおいても直らないため、
+    // リトライを促す502ではなく503で「利用できない」と伝える。
+    const status = isRecord(err) ? err['status'] : undefined;
+    if (status === 403 || status === 404) {
+      return json(503, { message: 'AI解析は現在利用できません（モデルの利用設定を確認してください）' });
     }
     return json(502, { message: 'AI解析に失敗しました。時間をおいて再度お試しください' });
   }
@@ -1546,17 +1535,12 @@ const analyzeItemImage = async (body: string | null): Promise<APIGatewayProxyRes
   if (response.stop_reason === 'refusal') {
     return json(422, { message: 'この画像は解析できませんでした。別の写真をお試しください' });
   }
-  const textBlock = response.content.find((block) => block.type === 'text');
-  if (textBlock === undefined || textBlock.type !== 'text') {
+  const toolBlock = response.content.find((block) => block.type === 'tool_use');
+  if (toolBlock === undefined || toolBlock.type !== 'tool_use') {
     return json(502, { message: 'AI解析の結果を取得できませんでした' });
   }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(textBlock.text);
-  } catch {
-    return json(502, { message: 'AI解析の結果を解釈できませんでした' });
-  }
+  // tool_use の input はパース済みのオブジェクトで返るため JSON.parse は不要。
+  const parsed: unknown = toolBlock.input;
   if (!isItemSuggestion(parsed)) {
     return json(502, { message: 'AI解析の結果が想定した形式ではありませんでした' });
   }

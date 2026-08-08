@@ -113,6 +113,14 @@ export class MeguriMonoStack extends cdk.Stack {
     const userPoolClient = new cognito.UserPoolClient(this, 'UserPoolClient', {
       userPool,
       authFlows: { userPassword: true },
+      // custom:orgId は出品元アカウントの所属を表し、出品の閲覧・編集・削除・
+      // 受け渡し完了の認可判定にそのまま使われる。writeAttributes を指定しないと
+      // 利用者自身が UpdateUserAttributes で書き換えられてしまい、他の出品元に
+      // なりすませるため、書き込みを本人が変更してよい属性だけに限定する。
+      writeAttributes: new cognito.ClientAttributes().withStandardAttributes({
+        email: true,
+        nickname: true,
+      }),
       preventUserExistenceErrors: true,
       idTokenValidity: cdk.Duration.hours(8),
       accessTokenValidity: cdk.Duration.hours(8),

@@ -4,6 +4,7 @@ import {
   AdminCreateUserCommand,
   AdminGetUserCommand,
   AdminSetUserPasswordCommand,
+  AdminUpdateUserAttributesCommand,
   CognitoIdentityProviderClient,
   UserNotFoundException,
 } from '@aws-sdk/client-cognito-identity-provider';
@@ -131,6 +132,18 @@ const ensureUser = async (
   try {
     const existing = await cognito.send(
       new AdminGetUserCommand({ UserPoolId: userPoolId, Username: user.email }),
+    );
+    // 既存アカウントでもニックネームと所属を毎回上書きする。ここを省くと
+    // 属性がずれたまま再シードしても直らず、デモの状態を戻せなくなる。
+    await cognito.send(
+      new AdminUpdateUserAttributesCommand({
+        UserPoolId: userPoolId,
+        Username: user.email,
+        UserAttributes: [
+          { Name: 'nickname', Value: user.nickname },
+          ...(orgId !== undefined ? [{ Name: 'custom:orgId', Value: orgId }] : []),
+        ],
+      }),
     );
     return getSub(existing.UserAttributes);
   } catch (error: unknown) {

@@ -15,6 +15,11 @@ export const QrScannerModal = ({ title, onDetected, onClose }: QrScannerModalPro
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const detectedRef = useRef(false);
 
+  // 呼び出し側がコールバックをメモ化していなくても、親の再描画のたびに
+  // カメラが停止・再起動してしまわないよう、最新の関数はrefで受け渡す。
+  const onDetectedRef = useRef(onDetected);
+  onDetectedRef.current = onDetected;
+
   useEffect(() => {
     const scanner = new Html5Qrcode(SCANNER_ELEMENT_ID);
     scannerRef.current = scanner;
@@ -26,7 +31,7 @@ export const QrScannerModal = ({ title, onDetected, onClose }: QrScannerModalPro
         (decodedText) => {
           if (detectedRef.current) return;
           detectedRef.current = true;
-          onDetected(decodedText);
+          onDetectedRef.current(decodedText);
         },
         () => {
           // 読み取り失敗（QRが枠内にない等）は毎フレーム発生しうるため無視する
@@ -37,11 +42,18 @@ export const QrScannerModal = ({ title, onDetected, onClose }: QrScannerModalPro
       });
 
     return () => {
-      scanner.stop().catch(() => {
-        // 既に停止済みの場合は無視
-      });
+      scanner
+        .stop()
+        .then(() => {
+          // 描画された映像を残さずDOMを片付ける
+          scanner.clear();
+        })
+        .catch(() => {
+          // カメラを起動できなかった場合など、既に停止済みなら何もしない
+        });
     };
-  }, [onDetected]);
+    // マウント時に一度だけカメラを起動する。onDetectedはrefで参照するため依存に含めない。
+  }, []);
 
   return (
     <div className="qr-modal-overlay" role="dialog" aria-modal="true" aria-label={title}>

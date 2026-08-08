@@ -51,7 +51,9 @@ type ReservationState = {
 // デモ決済用のカード情報をブラウザ内(localStorage)にだけ保存し、次回以降の入力を省略する
 const SAVED_CARD_KEY = 'megurimono-demo-card';
 
-type SavedCard = { cardNumber: string; expiry: string };
+// 決済API(postPayment)はitemIdしか送らずカード情報をサーバーへ渡さない。再表示にも
+// 下4桁しか使わないため、カード番号そのものは保存せず下4桁と有効期限だけを持つ。
+type SavedCard = { last4: string; expiry: string };
 
 const loadSavedCard = (): SavedCard | null => {
   try {
@@ -61,11 +63,13 @@ const loadSavedCard = (): SavedCard | null => {
     if (
       typeof parsed === 'object' &&
       parsed !== null &&
-      typeof (parsed as SavedCard).cardNumber === 'string' &&
+      typeof (parsed as SavedCard).last4 === 'string' &&
       typeof (parsed as SavedCard).expiry === 'string'
     ) {
       return parsed as SavedCard;
     }
+    // カード番号をそのまま保存していた頃の値が残っている場合はここで消す
+    window.localStorage.removeItem(SAVED_CARD_KEY);
     return null;
   } catch {
     return null;
@@ -80,11 +84,7 @@ const saveCard = (card: SavedCard): void => {
   }
 };
 
-const maskCardNumber = (cardNumber: string): string => {
-  const digits = cardNumber.replace(/\s/g, '');
-  const last4 = digits.slice(-4);
-  return `**** **** **** ${last4}`;
-};
+const maskCardNumber = (last4: string): string => `**** **** **** ${last4}`;
 
 // 入力中のカード番号を4桁ごとにスペース区切りで表示する(最大19桁までのカード番号を想定)
 const formatCardNumber = (value: string): string => {
@@ -140,7 +140,10 @@ const PaymentPanel = ({
       return;
     }
     if (rememberCard) {
-      const card = { cardNumber: cardNumber.trim(), expiry: expiry.trim() };
+      const card = {
+        last4: cardNumber.replace(/\D/g, '').slice(-4),
+        expiry: expiry.trim(),
+      };
       saveCard(card);
       setSavedCard(card);
     }
@@ -157,7 +160,7 @@ const PaymentPanel = ({
           ※デモ環境のため実際の決済は発生しません。カード情報はこの端末内にのみ保存されます。
         </p>
         <div className="saved-card">
-          <span className="saved-card__number">{maskCardNumber(savedCard.cardNumber)}</span>
+          <span className="saved-card__number">{maskCardNumber(savedCard.last4)}</span>
           <span className="saved-card__expiry">有効期限 {savedCard.expiry}</span>
         </div>
         {error !== null ? (
@@ -269,6 +272,9 @@ const PaymentPanel = ({
 // 出品元・管理者がQRを読み取って受け渡し完了にするまでの間、この間隔で状態をポーリングする
 // (解錠されたことをできるだけ早く画面に反映したいため短めの間隔にしている)
 const PICKUP_STATUS_POLL_MS = 1500;
+// 受け渡しは受取窓口でその場で完了するため、画面を開いたまま放置された場合に
+// 無期限で問い合わせ続ける必要はない。この時間を過ぎたら止め、再訪時にまた回す。
+const PICKUP_STATUS_POLL_MAX_MS = 10 * 60 * 1000;
 
 const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
   const [paid, setPaid] = useState(item.paymentStatus === 'paid');
@@ -288,7 +294,18 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
   // 出品元・管理者が受取QRを読み取って受け渡し完了にすると、ここでそれを検知して自動的に画面を更新する
   useEffect(() => {
     if (status !== 'reserved') return undefined;
+
+    // タブが裏にある間は計測を進めない。裏のまま時間切れにすると、
+    // 表に戻ったときに監視が終わっていて解錠に気づけなくなるため。
+    let activeSince = Date.now();
+    const onVisibilityChange = (): void => {
+      if (!document.hidden) activeSince = Date.now();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      if (Date.now() - activeSince > PICKUP_STATUS_POLL_MAX_MS) return;
       fetchItemDetail(item.itemId)
         .then((res) => {
           if (res.item.pickupStatus === 'completed') {
@@ -306,7 +323,11 @@ const WinCard = ({ item }: { item: LostItem }): JSX.Element => {
           // ポーリング失敗時は次回に再試行する
         });
     }, PICKUP_STATUS_POLL_MS);
-    return () => window.clearInterval(timer);
+
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, [status, item.itemId, pickupDate, pickupCode, pickupBoxNumber]);
 
   const handleReserve = (event: React.FormEvent<HTMLFormElement>): void => {

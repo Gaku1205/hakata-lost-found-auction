@@ -398,18 +398,23 @@ const placeBid = async (
             Update: {
               TableName: ITEMS_TABLE,
               Key: { itemId },
-              UpdateExpression:
-                'SET currentPrice = :amount, bidCount = bidCount + :one, topBidderSub = :sub, endTime = :newEnd',
+              // 延長しないときは endTime に触れない。読み取り時点の値を書き戻すと、
+              // その間に別の入札が自動延長していた場合に巻き戻してしまうため。
+              UpdateExpression: extended
+                ? 'SET currentPrice = :amount, bidCount = bidCount + :one, topBidderSub = :sub, endTime = :newEnd'
+                : 'SET currentPrice = :amount, bidCount = bidCount + :one, topBidderSub = :sub',
               ConditionExpression:
                 '#st = :active AND endTime > :now AND currentPrice < :amount AND (attribute_not_exists(topBidderSub) OR topBidderSub <> :sub)',
               ExpressionAttributeNames: { '#st': 'status' },
+              // 未使用のプレースホルダを渡すとDynamoDBが検証エラーにするため、
+              // 延長するときだけ :newEnd を含める。
               ExpressionAttributeValues: {
                 ':amount': amount,
                 ':one': 1,
                 ':active': 'active',
                 ':now': now,
                 ':sub': user.sub,
-                ':newEnd': newEndTime,
+                ...(extended ? { ':newEnd': newEndTime } : {}),
               },
             },
           },

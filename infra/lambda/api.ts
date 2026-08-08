@@ -1435,7 +1435,10 @@ const ANALYZE_SYSTEM_PROMPT = `あなたは遺失物オークション「めぐ�
 - size: 寸法や規格が判断できる場合のみ。例「約60cm」「Mサイズ」。
 - accessories: 写真に一緒に写っている付属品。例「専用ケース」「充電ケーブル」。
 
-写真から判断できない項目は必ず空文字にしてください。推測で埋めないこと。
+brand・size・accessories は写真から判断できなければ必ず空文字にしてください。推測で埋めないこと。
+一方 title・category・conditionRank・description・color は必ず値を入れてください。暗い写真などで
+判断しづらい場合も、選択肢の中から最も近いものを選び、見えている範囲で記述します。
+「<UNKNOWN>」「不明」などのプレースホルダーを値として出力してはいけません。
 遺失物なので所有者を特定しうる情報（氏名・住所・口座番号・書類の記載内容など）は一切書かないでください。`;
 
 const isItemSuggestion = (value: unknown): value is ItemSuggestion =>
@@ -1464,6 +1467,65 @@ const isAnalyzableImage = (value: unknown): value is AnalyzableImage =>
   value['imageBase64'] !== '' &&
   isAnalyzableMediaType(value['mediaType']);
 
+// tool_use の input_schema は enum を強制しない（output_config と違い保証がない）。
+// 暗い写真などでモデルが判断を諦めると「<UNKNOWN>」のような選択肢外の値を返すことが
+// あるため、形式違反のときだけ引き直す。2回で十分実用的な成功率になる。
+const ANALYZE_MAX_ATTEMPTS = 2;
+
+type AnalyzeOutcome =
+  | { kind: 'ok'; suggestion: ItemSuggestion }
+  | { kind: 'refusal' }
+  | { kind: 'invalid' };
+
+const requestItemSuggestion = async (images: AnalyzableImage[]): Promise<AnalyzeOutcome> => {
+  const response = await bedrock.messages.create({
+    model: BEDROCK_MODEL_ID,
+    max_tokens: 2048,
+    system: ANALYZE_SYSTEM_PROMPT,
+    tools: [
+      {
+        name: ITEM_SUGGESTION_TOOL_NAME,
+        description: '写真から読み取った内容で出品フォームの各項目を提出する',
+        input_schema: ITEM_SUGGESTION_SCHEMA,
+      },
+    ],
+    tool_choice: { type: 'tool', name: ITEM_SUGGESTION_TOOL_NAME },
+    messages: [
+      {
+        role: 'user',
+        content: [
+          ...images.map((image) => ({
+            type: 'image' as const,
+            source: { type: 'base64' as const, media_type: image.mediaType, data: image.imageBase64 },
+          })),
+          {
+            type: 'text',
+            text:
+              images.length > 1
+                ? `この${images.length}枚は同じ落とし物を複数アングルから撮った写真です。出品フォームの各項目を埋めてください。`
+                : 'この写真の落とし物について、出品フォームの各項目を埋めてください。',
+          },
+        ],
+      },
+    ],
+  });
+
+  if (response.stop_reason === 'refusal') return { kind: 'refusal' };
+
+  const toolBlock = response.content.find((block) => block.type === 'tool_use');
+  if (toolBlock === undefined || toolBlock.type !== 'tool_use') {
+    console.warn('AI解析: tool_useブロックが返りませんでした', response.stop_reason);
+    return { kind: 'invalid' };
+  }
+  // tool_use の input はパース済みのオブジェクトで返るため JSON.parse は不要。
+  const parsed: unknown = toolBlock.input;
+  if (!isItemSuggestion(parsed)) {
+    console.warn('AI解析: 想定した形式ではありません', JSON.stringify(parsed));
+    return { kind: 'invalid' };
+  }
+  return { kind: 'ok', suggestion: parsed };
+};
+
 // 出品画像（1〜複数枚）をClaudeに渡し、出品フォームの各項目を推定して返す。管理者・出品元の双方が利用する。
 const analyzeItemImage = async (body: string | null): Promise<APIGatewayProxyResult> => {
   const data = parseBody(body);
@@ -1488,63 +1550,31 @@ const analyzeItemImage = async (body: string | null): Promise<APIGatewayProxyRes
     return json(413, { message: '画像サイズの合計が大きすぎます' });
   }
 
-  let response;
-  try {
-    response = await bedrock.messages.create({
-      model: BEDROCK_MODEL_ID,
-      max_tokens: 2048,
-      system: ANALYZE_SYSTEM_PROMPT,
-      tools: [
-        {
-          name: ITEM_SUGGESTION_TOOL_NAME,
-          description: '写真から読み取った内容で出品フォームの各項目を提出する',
-          input_schema: ITEM_SUGGESTION_SCHEMA,
-        },
-      ],
-      tool_choice: { type: 'tool', name: ITEM_SUGGESTION_TOOL_NAME },
-      messages: [
-        {
-          role: 'user',
-          content: [
-            ...images.map((image) => ({
-              type: 'image' as const,
-              source: { type: 'base64' as const, media_type: image.mediaType, data: image.imageBase64 },
-            })),
-            {
-              type: 'text',
-              text:
-                images.length > 1
-                  ? `この${images.length}枚は同じ落とし物を複数アングルから撮った写真です。出品フォームの各項目を埋めてください。`
-                  : 'この写真の落とし物について、出品フォームの各項目を埋めてください。',
-            },
-          ],
-        },
-      ],
-    });
-  } catch (err: unknown) {
-    console.error('AI解析に失敗しました', err);
-    // モデルアクセス未承認やIAM権限不足は時間をおいても直らないため、
-    // リトライを促す502ではなく503で「利用できない」と伝える。
-    const status = isRecord(err) ? err['status'] : undefined;
-    if (status === 403 || status === 404) {
-      return json(503, { message: 'AI解析は現在利用できません（モデルの利用設定を確認してください）' });
+  let outcome: AnalyzeOutcome = { kind: 'invalid' };
+  for (let attempt = 1; attempt <= ANALYZE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      outcome = await requestItemSuggestion(images);
+    } catch (err: unknown) {
+      console.error('AI解析に失敗しました', err);
+      // モデルアクセス未承認やIAM権限不足は時間をおいても直らないため、
+      // リトライを促す502ではなく503で「利用できない」と伝える。
+      const status = isRecord(err) ? err['status'] : undefined;
+      if (status === 403 || status === 404) {
+        return json(503, { message: 'AI解析は現在利用できません（モデルの利用設定を確認してください）' });
+      }
+      return json(502, { message: 'AI解析に失敗しました。時間をおいて再度お試しください' });
     }
-    return json(502, { message: 'AI解析に失敗しました。時間をおいて再度お試しください' });
+    if (outcome.kind !== 'invalid') break;
   }
 
-  if (response.stop_reason === 'refusal') {
+  if (outcome.kind === 'refusal') {
     return json(422, { message: 'この画像は解析できませんでした。別の写真をお試しください' });
   }
-  const toolBlock = response.content.find((block) => block.type === 'tool_use');
-  if (toolBlock === undefined || toolBlock.type !== 'tool_use') {
-    return json(502, { message: 'AI解析の結果を取得できませんでした' });
-  }
-  // tool_use の input はパース済みのオブジェクトで返るため JSON.parse は不要。
-  const parsed: unknown = toolBlock.input;
-  if (!isItemSuggestion(parsed)) {
+  if (outcome.kind === 'invalid') {
     return json(502, { message: 'AI解析の結果が想定した形式ではありませんでした' });
   }
 
+  const parsed = outcome.suggestion;
   const suggestion: ItemSuggestion = {
     title: clip(parsed.title, 60),
     category: parsed.category,

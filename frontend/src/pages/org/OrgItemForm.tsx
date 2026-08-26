@@ -58,6 +58,8 @@ const isoToLocalInput = (iso: string): string => {
 
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+// デモ用: どのPCからでもファイル選択なしでAI自動入力を試せるようにするサンプル画像
+const DEMO_IMAGE_URL = '/images/demo/airpods-pro.webp';
 
 const defaultFoundDate = (): string => new Date().toISOString().slice(0, 10);
 
@@ -177,9 +179,7 @@ export const OrgItemForm = (): JSX.Element => {
     })();
   };
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = '';
+  const addFiles = (files: File[]): void => {
     if (files.length === 0) return;
     setImageError(null);
 
@@ -221,6 +221,32 @@ export const OrgItemForm = (): JSX.Element => {
     runAnalysis(
       updatedSlots.flatMap((slot) => (slot.kind === 'new' ? [slot.file] : [])),
     );
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    addFiles(files);
+  };
+
+  const [loadingDemoImage, setLoadingDemoImage] = useState(false);
+
+  const handleUseDemoImage = (): void => {
+    setImageError(null);
+    setLoadingDemoImage(true);
+    void (async () => {
+      try {
+        const response = await fetch(DEMO_IMAGE_URL);
+        if (!response.ok) throw new Error();
+        const blob = await response.blob();
+        const file = new File([blob], 'airpods-pro.webp', { type: blob.type || 'image/webp' });
+        addFiles([file]);
+      } catch {
+        setImageError('デモ画像の読み込みに失敗しました');
+      } finally {
+        setLoadingDemoImage(false);
+      }
+    })();
   };
 
   const handleRemoveSlot = (index: number): void => {
@@ -430,6 +456,14 @@ export const OrgItemForm = (): JSX.Element => {
                   onChange={handleFileChange}
                   disabled={imageSlots.length >= MAX_ITEM_IMAGES}
                 />
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--small"
+                  onClick={handleUseDemoImage}
+                  disabled={loadingDemoImage || imageSlots.length >= MAX_ITEM_IMAGES}
+                >
+                  {loadingDemoImage ? '読み込み中…' : 'デモ画像を試す'}
+                </button>
               </div>
             </div>
             {imageError !== null ? (

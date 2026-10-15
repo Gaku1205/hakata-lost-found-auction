@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { CloudFormationClient, DescribeStacksCommand } from '@aws-sdk/client-cloudformation';
 import {
   AdminAddUserToGroupCommand,
@@ -295,11 +297,13 @@ const orgById = new Map(ORGANIZATIONS.map((org) => [org.orgId, org]));
 
 
 
-// frontend/public/images/items/ に実写真が用意済みのitemIdのみ。
+// frontend/public/images/items/ に実写真が用意済みのitemIdのみ（画像はリポジトリに含めないため実在チェックする）。
 // それ以外はimageUrlを付けず、ItemCardのカテゴリアイコン表示にフォールバックさせる。
+const ITEM_IMAGES_DIR = join(__dirname, '../../frontend/public/images/items');
 const ITEM_IDS_WITH_PHOTO = new Set(
   Array.from({ length: 64 }, (_, i) => `i-${String(i + 1).padStart(3, '0')}`).filter(
-    (itemId) => !ITEM_IDS_WITHOUT_PHOTO.has(itemId),
+    (itemId) =>
+      !ITEM_IDS_WITHOUT_PHOTO.has(itemId) && existsSync(join(ITEM_IMAGES_DIR, `${itemId}.jpg`)),
   ),
 );
 

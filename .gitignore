@@ -4,3 +4,5 @@ dist/
 .env
 *.local
 cdk-outputs.json
+# 商品画像は権利の都合でリポジトリに含めない
+frontend/public/images/

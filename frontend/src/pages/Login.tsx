@@ -3,23 +3,26 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { AuthError } from '../auth/cognito';
 
-const DEMO_ACCOUNTS = [
+type DemoAccount = { label: string; email: string; password: string };
+
+// デモアカウントのパスワードはビルド時の環境変数で渡す。未設定のアカウントはボタンを出さない
+const DEMO_ACCOUNTS: readonly DemoAccount[] = [
   {
     label: '一般ユーザーでお試しログイン',
     email: 'demo@example.com',
-    password: 'REDACTED_DEMO_PASSWORD',
+    password: import.meta.env.VITE_DEMO_PASSWORD,
   },
   {
     label: '管理者でお試しログイン',
     email: 'admin@example.com',
-    password: 'REDACTED_ADMIN_PASSWORD',
+    password: import.meta.env.VITE_DEMO_ADMIN_PASSWORD,
   },
   {
     label: '出品元でお試しログイン',
     email: 'org@example.com',
-    password: 'REDACTED_ORG_PASSWORD',
+    password: import.meta.env.VITE_DEMO_ORG_PASSWORD,
   },
-] as const;
+].filter((account): account is DemoAccount => typeof account.password === 'string' && account.password !== '');
 
 const returnToOf = (state: unknown): string => {
   if (typeof state === 'object' && state !== null) {
@@ -99,20 +102,22 @@ export const Login = (): JSX.Element => {
           </button>
         </form>
 
-        <div className="demo-login">
-          <p className="demo-login__heading">審査用デモアカウント</p>
-          {DEMO_ACCOUNTS.map((account) => (
-            <button
-              key={account.email}
-              type="button"
-              className="btn btn--ghost"
-              disabled={submitting}
-              onClick={() => doSignIn(account.email, account.password)}
-            >
-              {account.label}
-            </button>
-          ))}
-        </div>
+        {DEMO_ACCOUNTS.length > 0 ? (
+          <div className="demo-login">
+            <p className="demo-login__heading">審査用デモアカウント</p>
+            {DEMO_ACCOUNTS.map((account) => (
+              <button
+                key={account.email}
+                type="button"
+                className="btn btn--ghost"
+                disabled={submitting}
+                onClick={() => doSignIn(account.email, account.password)}
+              >
+                {account.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         <p className="auth-alt">
           アカウントをお持ちでない方は <Link to="/signup">新規登録</Link>

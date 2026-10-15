@@ -15,12 +15,19 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider';
 import { ITEM_IDS_WITHOUT_PHOTO, SEEDS } from './seed-items';
 
+const requireEnv = (name: string): string => {
+  const value = process.env[name];
+  if (value === undefined || value === '') {
+    throw new Error(`環境変数 ${name} が未設定です`);
+  }
+  return value;
+};
+
 const REGION = process.env.AWS_REGION ?? 'ap-northeast-1';
-const USER_POOL_CLIENT_ID = process.env.USER_POOL_CLIENT_ID ?? 'REDACTED_CLIENT_ID';
-const API_BASE =
-  process.env.API_BASE ?? 'https://REDACTED_API_ID.execute-api.ap-northeast-1.amazonaws.com/prod';
+const USER_POOL_CLIENT_ID = requireEnv('USER_POOL_CLIENT_ID');
+const API_BASE = requireEnv('API_BASE');
 const ADMIN_EMAIL = 'admin@example.com';
-const ADMIN_PASSWORD = 'REDACTED_ADMIN_PASSWORD';
+const ADMIN_PASSWORD = requireEnv('SEED_ADMIN_PASSWORD');
 
 const IMAGES_DIR = join(__dirname, '../../frontend/public/images/items');
 const REPORT_PATH = join(__dirname, '../../../../other/aws-ai-contest/ai-accuracy-results.md');

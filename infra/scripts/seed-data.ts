@@ -47,20 +47,29 @@ const INQUIRIES_TABLE = 'megurimono-inquiries';
 const REGION = 'ap-northeast-1';
 const STACK_NAME = 'MeguriMonoStack';
 
+// デモアカウントのパスワードはリポジトリに置かず、実行時に環境変数で渡す
+const requireEnv = (name: string): string => {
+  const value = process.env[name];
+  if (value === undefined || value === '') {
+    throw new Error(`環境変数 ${name} が未設定です（デモアカウントのパスワードを指定してください）`);
+  }
+  return value;
+};
+
 const DEMO_USER = {
   email: 'demo@example.com',
-  password: 'REDACTED_DEMO_PASSWORD',
+  password: requireEnv('SEED_DEMO_PASSWORD'),
   nickname: 'はかた太郎',
 };
 const ADMIN_USER = {
   email: 'admin@example.com',
-  password: 'REDACTED_ADMIN_PASSWORD',
+  password: requireEnv('SEED_ADMIN_PASSWORD'),
   nickname: '運営局',
 };
 // 出品元（商業施設）アカウントのデモ。JR博多シティ（org-jr-hakata）に紐づける
 const ORG_USER = {
   email: 'org@example.com',
-  password: 'REDACTED_ORG_PASSWORD',
+  password: requireEnv('SEED_ORG_PASSWORD'),
   nickname: 'JR博多シティ',
   orgId: 'org-jr-hakata',
 };
